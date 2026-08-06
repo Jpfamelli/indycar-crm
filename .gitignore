@@ -1,0 +1,7 @@
+# arquivos com segredos — nunca versionar
+.env
+
+# banco local
+crm.db
+
+node_modules/

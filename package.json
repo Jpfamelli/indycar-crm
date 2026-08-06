@@ -1,0 +1,17 @@
+{
+  "name": "indycar-crm",
+  "version": "0.1.0",
+  "description": "CRM da IndyCar Centro Automotivo — leads, pipeline, atribuição de origem e resumo semanal com IA",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "seed": "node -e \"require('./db').reseed(); console.log('Banco populado com dados de exemplo.')\""
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.68.0",
+    "@supabase/supabase-js": "^2.112.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
