@@ -260,11 +260,15 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-/* Escuta só em localhost por padrão. Agora que a aba Integrações guarda tokens
-   do Meta e do Google, deixar em 0.0.0.0 exporia o CRM (sem senha) para
-   qualquer aparelho no Wi-Fi da oficina. Para acessar de outra máquina da rede,
-   rode com:  CRM_HOST=0.0.0.0 node server.js  — e só numa rede confiável. */
-const HOST = process.env.CRM_HOST || '127.0.0.1';
+/* Onde escutar:
+   - Na nuvem (Render), TEM de ser 0.0.0.0 — o roteador do Render fala com o
+     processo de fora do container; preso em 127.0.0.1 o serviço nunca responde.
+     Lá o acesso é protegido pelo login (toda rota /api exige token válido).
+   - Na máquina da oficina, fica em 127.0.0.1: o CRM guarda tokens do Meta e do
+     Google, e abrir para o Wi-Fi local não traz ganho nenhum.
+   Force com CRM_HOST se precisar de outra coisa. */
+const NA_NUVEM = !!(process.env.RENDER || process.env.PORT);
+const HOST = process.env.CRM_HOST || (NA_NUVEM ? '0.0.0.0' : '127.0.0.1');
 
 server.listen(PORT, HOST, () => {
   console.log(`\n🏁 IndyCar CRM rodando em http://localhost:${PORT}`);
