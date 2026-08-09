@@ -57,28 +57,83 @@ const SERVICOS = ['Troca de Óleo de Motor','Troca de Óleo de Câmbio','Freios'
    TODOS  = base completa (dashboard, funil e o modal usam) */
 let STATUSES = [], ORIGENS = [], LEADS = [], TODOS = [], STATS = null;
 
+/* PERFIL   = quem está logado (nome, e-mail, papel)
+   SOU_ADMIN é só para a apresentação: o servidor confere de novo em cada rota. */
+let PERFIL = null, SOU_ADMIN = false;
+let CATALOGO = [];              // os 138 serviços, como vieram do banco
+
 /* ---------------- Navegação ---------------- */
 const TITULOS = {
-  dashboard:   ['Dashboard', 'Visão geral da operação comercial'],
-  leads:       ['Leads & Clientes', 'Todos os contatos, carros e serviços'],
-  pipeline:    ['Funil de Vendas', 'Acompanhe cada lead até o fechamento'],
-  origem:      ['Origem dos Leads', 'De onde vem cada cliente — e quanto rende'],
-  integracoes: ['Integrações', 'Meta Ads, Google Ads e o ROI de cada canal'],
-  ia:          ['Resumo com IA', 'Análise inteligente da semana'],
+  dashboard:     ['Dashboard', 'Visão geral da operação comercial'],
+  leads:         ['Leads', 'Todos os contatos, carros e serviços'],
+  clientes:      ['Clientes', 'A base compartilhada com a agenda e o atendimento'],
+  pipeline:      ['Funil de Vendas', 'Acompanhe cada lead até o fechamento'],
+  origem:        ['Origem dos Leads', 'De onde vem cada cliente — e quanto rende'],
+  servicos:      ['Serviços', 'O catálogo que a IA usa para responder o cliente'],
+  integracoes:   ['Integrações', 'Meta Ads, Google Ads e o ROI de cada canal'],
+  ia:            ['Resumo com IA', 'Análise inteligente da semana'],
+  configuracoes: ['Configurações', 'Sua conta, sua senha e a equipe'],
 };
-// a busca só filtra estas abas — nas outras ela ficava visível e inerte
+// a busca do topo só filtra estas abas — nas outras ela ficava visível e inerte
+// (Clientes e Serviços têm a própria busca, dentro da aba)
 const ABAS_COM_BUSCA = new Set(['leads', 'pipeline']);
+// "+ Novo Lead" não faz sentido no catálogo nem nas configurações
+const ABAS_SEM_NOVO = new Set(['servicos', 'configuracoes']);
 
 function irPara(v) {
+  if (!TITULOS[v]) return;
   $$('.nav-item').forEach(x => x.classList.toggle('active', x.dataset.view === v));
   $$('.view').forEach(x => x.classList.remove('active'));
   $(`#view-${v}`)?.classList.add('active');
   $('#viewTitle').textContent = TITULOS[v][0];
   $('#viewSub').textContent = TITULOS[v][1];
   $('.search').style.display = ABAS_COM_BUSCA.has(v) ? '' : 'none';
-  if (v === 'integracoes') carregarIntegracoes();
+  $('#btnNovo').style.display = ABAS_SEM_NOVO.has(v) ? 'none' : '';
+  if (v === 'integracoes')   carregarIntegracoes();
+  if (v === 'clientes')      carregarClientes();
+  if (v === 'servicos')      carregarCatalogo();
+  if (v === 'configuracoes') carregarConfiguracoes();
 }
 $$('.nav-item').forEach(b => b.addEventListener('click', () => irPara(b.dataset.view)));
+
+/* ---------------- Tema claro / escuro ----------------
+   O <html data-tema> já foi definido pelo script inline do <head> (para não
+   piscar). Aqui só sincronizamos o botão, o meta e a persistência. */
+const TEMA_KEY = 'indycar_tema';
+const temaAtual = () =>
+  document.documentElement.getAttribute('data-tema') === 'claro' ? 'claro' : 'escuro';
+
+function aplicarTema(tema) {
+  const claro = tema === 'claro';
+  const raiz = document.documentElement;
+
+  /* Desliga as transições durante a troca. Sem isto, o Chrome congela a cor
+     antiga de tudo que tem transition e a variável mudou — medido aqui: a
+     barra lateral ficava em rgb(13,13,15) com --sidebar já valendo #ffffff. */
+  raiz.classList.add('trocando-tema');
+  raiz.setAttribute('data-tema', claro ? 'claro' : 'escuro');
+  void document.body.offsetHeight;              // força o recálculo já, sem transição
+  const soltar = () => raiz.classList.remove('trocando-tema');
+  requestAnimationFrame(() => requestAnimationFrame(soltar));
+  // rede de segurança: requestAnimationFrame não roda em aba oculta, e sem
+  // isso as transições ficariam desligadas até a aba voltar para a frente
+  setTimeout(soltar, 150);
+
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', claro ? '#eaecf0' : '#0a0a0b');
+
+  const ico = $('#temaIco'), txt = $('#temaTxt');
+  if (ico) ico.textContent = claro ? '☀️' : '🌙';
+  if (txt) txt.textContent = claro ? 'Tema claro' : 'Tema escuro';
+
+  try { localStorage.setItem(TEMA_KEY, claro ? 'claro' : 'escuro'); } catch { /* ignora */ }
+}
+
+$('#btnTema')?.addEventListener('click', () =>
+  aplicarTema(temaAtual() === 'claro' ? 'escuro' : 'claro'));
+
+// deixa o botão e o meta coerentes com o que o script do <head> já aplicou
+aplicarTema(temaAtual());
 
 /* ---------------- Toast ---------------- */
 let toastT;
@@ -92,6 +147,20 @@ function toast(msg) {
 
 /* ---------------- Carregar dados ---------------- */
 async function carregar() {
+  // quem sou eu: define o que a tela mostra (o servidor confere de novo, sempre)
+  try {
+    PERFIL = await api('/api/perfil');
+    SOU_ADMIN = PERFIL?.papel === 'admin';
+  } catch { PERFIL = null; SOU_ADMIN = false; }
+
+  /* Esconde o que só admin usa. É só apresentação — o servidor devolve 403
+     de qualquer forma; isto evita o atendente clicar e levar erro na cara.
+     O "Dados de exemplo" APAGA todos os leads: fora da vista de quem não pode. */
+  const btnSeed = $('#btnSeed');
+  if (btnSeed) btnSeed.hidden = !SOU_ADMIN;
+  const navInteg = $('.nav-item[data-view="integracoes"]');
+  if (navInteg) navInteg.hidden = !SOU_ADMIN;
+
   try {
     STATS = await api('/api/stats');
     STATUSES = STATS.dominios.STATUSES;
@@ -311,7 +380,11 @@ $('#btnNovo').addEventListener('click', () => abrirModal(null));
 $('#modalX').addEventListener('click', fecharModal);
 $('#btnCancelar').addEventListener('click', fecharModal);
 modal.addEventListener('click', e => { if (e.target === modal) fecharModal(); });
-document.addEventListener('keydown', e => { if (e.key === 'Escape') fecharModal(); });
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  fecharModal();
+  fecharFichaCliente();
+});
 
 $('#leadForm').addEventListener('submit', async e => {
   e.preventDefault();
@@ -575,6 +648,442 @@ $('#formMetrica').addEventListener('submit', async e => {
 });
 
 $('#mesROI').addEventListener('change', carregarROI);
+
+/* ============================================================
+   CLIENTES — a base compartilhada com a Agenda e o Atendimento
+   ============================================================ */
+const LABEL_AGENDAMENTO = {
+  agendado:'Agendado', confirmado:'Confirmado', em_atendimento:'Em atendimento',
+  concluido:'Concluído', compareceu:'Compareceu', nao_veio:'Não veio', cancelado:'Cancelado',
+};
+/* Data com ano — na ficha do cliente o histórico atravessa meses e
+   "12/03" sozinho não diz de qual ano é. */
+const dtAno = s => s ? new Date(s).toLocaleDateString('pt-BR',
+  { day:'2-digit', month:'2-digit', year:'2-digit' }) : '—';
+/* Data pura do banco ("2026-07-16") — new Date() nela assume UTC e o
+   fuso do Brasil jogaria o dia para trás. Por isso montamos na mão. */
+const dtSimples = s => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s ?? ''));
+  return m ? `${m[3]}/${m[2]}/${m[1].slice(2)}` : '—';
+};
+const iniciais = nome => String(nome ?? '?').trim().split(/\s+/)
+  .slice(0, 2).map(p => p[0] || '').join('').toUpperCase() || '?';
+
+const modalCli = $('#modalCliBg');
+
+async function carregarClientes() {
+  const alvo = $('#tblClientes');
+  const q = $('#buscaCliente').value.trim();
+  try {
+    const r = await api('/api/clientes' + (q ? `?q=${encodeURIComponent(q)}` : ''));
+    const lista = r.clientes || [];
+
+    $('#cliKpis').innerHTML = `
+      <div class="kpi"><div class="kpi-label">${r.filtrado ? 'Clientes encontrados' : 'Clientes na base'}</div>
+        <div class="kpi-value">${r.total}</div>
+        <div class="kpi-delta"><span class="flat">${r.filtrado
+          ? `de ${r.totalBase} na base` : 'compartilhada com a agenda'}</span></div></div>
+      <div class="kpi"><div class="kpi-label">Já faturado</div>
+        <div class="kpi-value">${brl(r.faturamento)}</div>
+        <div class="kpi-delta"><span class="flat">${r.filtrado
+          ? `de ${brl(r.faturamentoBase)} no total`
+          : 'serviços concluídos, sem contar duas vezes'}</span></div></div>
+      <div class="kpi"><div class="kpi-label">Ticket por cliente</div>
+        <div class="kpi-value">${brl(r.total ? r.faturamento / r.total : 0)}</div>
+        <div class="kpi-delta"><span class="flat">média ${r.filtrado
+          ? 'de quem apareceu na busca' : 'da base inteira'}</span></div></div>`;
+
+    $('#cliCount').textContent = `${lista.length} cliente${lista.length === 1 ? '' : 's'}`
+      + (q ? ' encontrados' : '');
+
+    if (!lista.length) {
+      alvo.innerHTML = `<tbody><tr><td class="muted" style="padding:26px;text-align:center">
+        ${q ? 'Nenhum cliente com esse termo.' : 'A base de clientes ainda está vazia.'}</td></tr></tbody>`;
+      return;
+    }
+
+    alvo.innerHTML = `<thead><tr><th>Cliente</th><th>Carro</th><th>Origem</th>
+        <th>Serviços</th><th>Em aberto</th><th>Já gastou</th><th>Último contato</th></tr></thead>
+      <tbody>${lista.map(c => `<tr data-id="${esc(c.id)}" tabindex="0">
+        <td><div class="cell-main">${esc(c.nome)}</div><div class="cell-sub">${esc(c.telefone)}</div></td>
+        <td><div class="cell-main">${esc(c.carro_modelo) || '—'}</div><div class="cell-sub">${esc(c.placa)}</div></td>
+        <td><span class="tag">${esc(LABEL_ORIGEM[c.origem] ?? c.origem ?? '—')}</span></td>
+        <td class="num">${c.servicos}</td>
+        <td class="num">${c.emAberto ? brl(c.emAberto) : '—'}</td>
+        <td class="num">${brl(c.gasto)}</td>
+        <td class="cell-sub">${dtAno(c.ultimoContato)}</td>
+      </tr>`).join('')}</tbody>`;
+
+    $$('tbody tr', alvo).forEach(tr => {
+      const abrir = () => abrirFichaCliente(tr.dataset.id);
+      tr.addEventListener('click', abrir);
+      // teclado: a linha é focável, então Enter/Espaço têm de abrir também
+      tr.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); abrir(); }
+      });
+    });
+  } catch (err) {
+    alvo.innerHTML = `<tbody><tr><td style="padding:26px" class="muted">
+      <div class="alert">Não consegui carregar os clientes: ${esc(err.message)}</div></td></tr></tbody>`;
+  }
+}
+
+let buscaCliT;
+$('#buscaCliente').addEventListener('input', () => {
+  clearTimeout(buscaCliT);
+  buscaCliT = setTimeout(carregarClientes, 280);
+});
+
+function fecharFichaCliente() {
+  if (!modalCli.classList.contains('open')) return;
+  modalCli.classList.remove('open');
+  document.body.style.overflow = '';
+}
+$('#modalCliX').addEventListener('click', fecharFichaCliente);
+modalCli.addEventListener('click', e => { if (e.target === modalCli) fecharFichaCliente(); });
+
+async function abrirFichaCliente(id) {
+  const alvo = $('#fichaCliente');
+  alvo.innerHTML = '<p class="muted"><span class="spinner"></span>Montando a ficha…</p>';
+  modalCli.classList.add('open');
+  document.body.style.overflow = 'hidden';
+
+  try {
+    const f = await api('/api/clientes/' + encodeURIComponent(id));
+    const c = f.cliente, r = f.resumo;
+
+    const linhasLeads = f.leads.length ? f.leads.map(l => `<tr>
+        <td><div class="cell-main">${esc(l.servico) || 'Serviço não informado'}</div>
+            <div class="cell-sub">${esc(LABEL_ORIGEM[l.origem] ?? l.origem ?? '')} · ${dtAno(l.created_at)}</div></td>
+        <td><span class="badge b-${esc(l.status)}">${esc(LABEL_STATUS[l.status] ?? l.status)}</span></td>
+        <td class="num">${brl(l.status === 'concluido' ? l.valor_pago : l.valor_orcado)}</td>
+      </tr>`).join('') : '';
+
+    const linhasAg = f.agendamentos.length ? f.agendamentos.map(a => `<tr>
+        <td><div class="cell-main">${esc(a.servico) || 'Serviço não informado'}</div>
+            <div class="cell-sub">${dtSimples(a.data)} às ${esc(String(a.hora ?? '').slice(0, 5))} · ${esc(a.veiculo) || '—'}</div></td>
+        <td><span class="badge b-${esc(a.status)}">${esc(LABEL_AGENDAMENTO[a.status] ?? a.status)}</span></td>
+        <td class="num">${a.valor ? brl(a.valor) : '—'}</td>
+      </tr>`).join('') : '';
+
+    alvo.innerHTML = `
+      <div class="ficha-topo">
+        <span class="avatar">${esc(iniciais(c.nome))}</span>
+        <div>
+          <div class="ficha-nome">${esc(c.nome)}</div>
+          <div class="ficha-sub">${esc(c.telefone)}${c.email ? ' · ' + esc(c.email) : ''}</div>
+          <div class="ficha-sub">${esc(c.carro_modelo) || 'Carro não informado'}${c.placa ? ' · ' + esc(c.placa) : ''}
+            · cliente desde ${dtAno(c.created_at)}</div>
+        </div>
+      </div>
+
+      <div class="ficha-kpis">
+        <div class="ficha-kpi"><span>Já gastou</span><b>${brl(r.gasto)}</b></div>
+        <div class="ficha-kpi"><span>Serviços feitos</span><b>${r.servicosFeitos}</b></div>
+        <div class="ficha-kpi"><span>Ticket médio</span><b>${brl(r.ticket)}</b></div>
+        <div class="ficha-kpi"><span>Em aberto</span><b>${brl(r.emAberto)}</b></div>
+        <div class="ficha-kpi"><span>Leads</span><b>${r.leads}</b></div>
+        <div class="ficha-kpi"><span>Agendamentos</span><b>${r.agendamentos}</b></div>
+      </div>
+
+      <div class="ficha-bloco">
+        <h4>Serviços já feitos</h4>
+        ${f.servicos.length
+          ? `<div class="chips">${f.servicos.map(s =>
+              `<span class="chip-servico">${esc(s.nome)}<b>${s.vezes}×</b></span>`).join('')}</div>`
+          : '<p class="muted" style="font-size:.88rem">Nenhum serviço concluído até agora.</p>'}
+      </div>
+
+      <div class="ficha-bloco">
+        <h4>Últimos leads</h4>
+        ${linhasLeads ? `<table class="mini-tabela"><tbody>${linhasLeads}</tbody></table>`
+                      : '<p class="muted" style="font-size:.88rem">Sem leads registrados.</p>'}
+      </div>
+
+      <div class="ficha-bloco">
+        <h4>Últimos agendamentos</h4>
+        ${linhasAg ? `<table class="mini-tabela"><tbody>${linhasAg}</tbody></table>`
+                   : '<p class="muted" style="font-size:.88rem">Sem horários marcados.</p>'}
+      </div>
+
+      ${c.observacoes ? `<div class="ficha-bloco"><h4>Observações</h4>
+        <p class="muted" style="font-size:.9rem;line-height:1.6">${esc(c.observacoes)}</p></div>` : ''}
+
+      <p class="muted" style="font-size:.78rem;margin-top:18px">
+        "Já gastou" soma os leads concluídos mais os agendamentos concluídos que não vieram de
+        um lead — assim o mesmo serviço não entra na conta duas vezes.</p>`;
+  } catch (err) {
+    alvo.innerHTML = `<div class="alert">Não consegui abrir a ficha: ${esc(err.message)}</div>`;
+  }
+}
+
+/* ============================================================
+   SERVIÇOS — o catálogo que alimenta a IA do WhatsApp
+   ============================================================ */
+const LABEL_ESCOPO = { LEVES:'Veículos leves', TODOS:'Todos os veículos', ESPECIFICO:'Caso a caso' };
+let filtroFaz = '';   // '' = todos | '1' = fazemos | '0' = não fazemos
+
+async function carregarCatalogo() {
+  const alvo = $('#listaServicos');
+  if (!CATALOGO.length) {
+    alvo.innerHTML = '<p class="muted"><span class="spinner"></span>Carregando o catálogo…</p>';
+  }
+  try {
+    const r = await api('/api/catalogo');
+    CATALOGO = r.servicos || [];
+    SOU_ADMIN = !!r.souAdmin;
+    $('#srvAviso').hidden = SOU_ADMIN;
+    renderCatalogo();
+  } catch (err) {
+    alvo.innerHTML = `<div class="alert">Não consegui carregar o catálogo: ${esc(err.message)}</div>`;
+  }
+}
+
+function renderCatalogo() {
+  const alvo = $('#listaServicos');
+  const termo = $('#buscaServico').value.trim().toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '');
+  const semAcento = s => String(s ?? '').toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '');
+
+  const lista = CATALOGO.filter(s => {
+    if (filtroFaz === '1' && !s.fazemos) return false;
+    if (filtroFaz === '0' && s.fazemos)  return false;
+    if (!termo) return true;
+    return semAcento(`${s.servico} ${s.categoria} ${s.tipo_veiculo}`).includes(termo);
+  });
+
+  const fazemos = CATALOGO.filter(s => s.fazemos).length;
+  $('#srvCount').textContent =
+    `${lista.length} de ${CATALOGO.length} · ${fazemos} que fazemos, ${CATALOGO.length - fazemos} que não`;
+
+  if (!lista.length) {
+    alvo.innerHTML = '<div class="vazio">Nenhum serviço com esse filtro.</div>';
+    return;
+  }
+
+  // agrupa por categoria mantendo a ordem que veio do banco
+  const porCategoria = new Map();
+  for (const s of lista) {
+    if (!porCategoria.has(s.categoria)) porCategoria.set(s.categoria, []);
+    porCategoria.get(s.categoria).push(s);
+  }
+
+  alvo.innerHTML = [...porCategoria.entries()].map(([categoria, itens]) => `
+    <div class="cat-bloco">
+      <div class="cat-head">
+        <h4>${esc(categoria)}</h4>
+        <span class="cat-conta">${itens.length}</span>
+      </div>
+      <div class="srv-lista">
+        ${itens.map(s => `
+          <div class="srv-item${s.fazemos ? '' : ' nao'}">
+            <div class="srv-txt">
+              <div class="srv-nome">${esc(s.servico)}
+                <span class="chip-escopo">${esc(LABEL_ESCOPO[s.escopo] ?? s.escopo ?? '')}</span></div>
+              ${s.tipo_veiculo ? `<div class="srv-veiculo">${esc(s.tipo_veiculo)}</div>` : ''}
+              ${s.observacao ? `<div class="srv-veiculo">${esc(s.observacao)}</div>` : ''}
+            </div>
+            <button type="button" class="srv-toggle ${s.fazemos ? 'faz' : 'naofaz'}"
+                    data-id="${esc(s.id)}" data-fazemos="${s.fazemos ? '1' : '0'}"
+                    ${SOU_ADMIN ? '' : 'disabled'}
+                    title="${SOU_ADMIN ? 'Clique para alternar' : 'Só o administrador altera'}">
+              ${s.fazemos ? 'Fazemos' : 'Não fazemos'}
+            </button>
+          </div>`).join('')}
+      </div>
+    </div>`).join('');
+
+  if (!SOU_ADMIN) return;
+  $$('#listaServicos .srv-toggle').forEach(b => b.addEventListener('click', async () => {
+    const id = b.dataset.id, novo = b.dataset.fazemos !== '1';
+    b.disabled = true;
+    try {
+      const r = await api('/api/catalogo/' + encodeURIComponent(id),
+        { method: 'PATCH', body: JSON.stringify({ fazemos: novo }) });
+      const i = CATALOGO.findIndex(s => s.id === id);
+      if (i >= 0) CATALOGO[i] = r.servico;
+      toast(novo ? `✅ A IA passa a oferecer "${r.servico.servico}"`
+                 : `🚫 A IA para de oferecer "${r.servico.servico}"`);
+      renderCatalogo();
+    } catch (err) {
+      toast('⚠️ ' + err.message);
+      b.disabled = false;
+    }
+  }));
+}
+
+let buscaSrvT;
+$('#buscaServico').addEventListener('input', () => {
+  clearTimeout(buscaSrvT);
+  buscaSrvT = setTimeout(renderCatalogo, 200);
+});
+$$('#filtrosServico .filtro-pill').forEach(b => b.addEventListener('click', () => {
+  filtroFaz = b.dataset.faz;
+  $$('#filtrosServico .filtro-pill').forEach(x => x.classList.toggle('ativo', x === b));
+  renderCatalogo();
+}));
+
+/* ============================================================
+   CONFIGURAÇÕES — minha conta · equipe e sistema
+   ============================================================ */
+const LABEL_PAPEL = { admin:'Administrador', atendente:'Atendente' };
+
+/* Seletor interno: "Minha conta" x "Equipe e sistema" */
+$$('#configTabs .config-pilula').forEach(b => b.addEventListener('click', () => {
+  const secao = b.dataset.secao;
+  $$('#configTabs .config-pilula').forEach(x => x.classList.toggle('ativo', x === b));
+  $$('.config-secao').forEach(s => s.classList.toggle('ativa', s.id === `config-${secao}`));
+}));
+
+async function carregarConfiguracoes() {
+  try {
+    PERFIL = await api('/api/perfil');
+    SOU_ADMIN = PERFIL?.papel === 'admin';
+    $('#perfilNome').value  = PERFIL?.nome ?? '';
+    $('#perfilEmail').value = PERFIL?.email ?? '';
+    $('#perfilPapel').value = LABEL_PAPEL[PERFIL?.papel] ?? (PERFIL?.papel || '—');
+  } catch (err) { toast('⚠️ ' + err.message); }
+
+  renderSistemaInfo();
+  await carregarEquipe();
+}
+
+function renderSistemaInfo() {
+  $('#sistemaInfo').innerHTML = `
+    <div class="howto-step"><span class="howto-n">1</span><p>
+      <strong>Banco único.</strong> CRM, Agenda e Atendimento gravam nas mesmas tabelas.
+      O cliente é reconhecido pelo <strong>telefone</strong> nos três.</p></div>
+    <div class="howto-step"><span class="howto-n">2</span><p>
+      <strong>Login único.</strong> O mesmo e-mail e senha entram nos três sistemas.
+      Tirar o acesso aqui tira em todos.</p></div>
+    <div class="howto-step"><span class="howto-n">3</span><p>
+      <strong>Catálogo é a boca da IA.</strong> A aba <strong>Serviços</strong> define o que a IA
+      oferece no WhatsApp. Mudou lá, muda no atendimento.</p></div>
+    <div class="howto-step"><span class="howto-n">4</span><p>
+      <strong>Chave da IA fica no servidor.</strong> Ela vive no arquivo <code>.env</code>,
+      em <code>ANTHROPIC_API_KEY</code>. Por segurança, esta tela não pede nem aceita a chave.</p></div>`;
+}
+
+async function carregarEquipe() {
+  const el = $('#listaEquipe');
+  el.innerHTML = '<p class="muted"><span class="spinner"></span>Carregando a equipe…</p>';
+  try {
+    const r = await api('/api/equipe');
+    const lista = r.equipe || [];
+    SOU_ADMIN = !!r.souAdmin;
+    $('#blocoCadastro').hidden = !SOU_ADMIN;
+    $('#avisoCadastro').hidden = SOU_ADMIN;
+
+    el.innerHTML = lista.length ? lista.map(p => `
+      <div class="equipe-item${p.ativo ? '' : ' inativo'}">
+        <span class="avatar">${esc(iniciais(p.nome))}</span>
+        <div class="equipe-txt">
+          <strong>${esc(p.nome)}</strong><br>
+          <small>${esc(p.email)} · ${esc(LABEL_PAPEL[p.papel] ?? p.papel)}${p.ativo ? '' : ' · sem acesso'}</small>
+        </div>
+        ${SOU_ADMIN && p.id !== r.meuId
+          ? `<button type="button" class="btn btn-ghost sm" data-membro="${esc(p.id)}"
+                data-ativar="${p.ativo ? '0' : '1'}">${p.ativo ? 'Tirar acesso' : 'Devolver acesso'}</button>`
+          : ''}
+      </div>`).join('')
+      : '<div class="vazio">Só você por enquanto.</div>';
+
+    // ligar/desligar o acesso de alguém
+    $$('#listaEquipe [data-membro]').forEach(b => b.addEventListener('click', async () => {
+      const ativar = b.dataset.ativar === '1';
+      if (!ativar && !confirm('Tirar o acesso desta pessoa? Ela não conseguirá mais entrar '
+        + 'no CRM, na agenda nem no atendimento.')) return;
+      b.disabled = true;
+      try {
+        await api('/api/equipe/ativo', { method: 'POST',
+          body: JSON.stringify({ id: b.dataset.membro, ativo: ativar }) });
+        toast(ativar ? '✅ Acesso devolvido' : '🔒 Acesso removido');
+        await carregarEquipe();
+      } catch (err) { toast('⚠️ ' + err.message); b.disabled = false; }
+    }));
+  } catch (err) {
+    el.innerHTML = `<div class="alert">Não consegui carregar a equipe: ${esc(err.message)}</div>`;
+  }
+}
+
+/* Salvar o próprio nome. O servidor pega o id do token — o corpo só leva o nome. */
+$('#formPerfil').addEventListener('submit', async e => {
+  e.preventDefault();
+  const nome = $('#perfilNome').value.trim();
+  const msg = $('#perfilMsg'), btn = $('#btnSalvarPerfil');
+  const mostrar = (texto, ok) => {
+    msg.textContent = texto;
+    msg.className = 'form-msg ' + (ok ? 'ok' : 'erro');
+    msg.hidden = false;
+  };
+  if (!nome) return mostrar('Escreva o seu nome.', false);
+
+  btn.disabled = true;
+  try {
+    await api('/api/perfil', { method: 'PATCH', body: JSON.stringify({ nome }) });
+    if (PERFIL) PERFIL.nome = nome;
+    mostrar('✅ Nome salvo.', true);
+    toast('✅ Perfil salvo');
+    await carregarEquipe();
+  } catch (err) {
+    mostrar('⚠️ Não consegui salvar: ' + err.message, false);
+  } finally { btn.disabled = false; }
+});
+
+/* Trocar a própria senha — direto no Supabase Auth, sem passar pelo servidor.
+   Regras: mínimo 8 caracteres e as duas iguais. */
+$('#formSenha').addEventListener('submit', async e => {
+  e.preventDefault();
+  const s1 = $('#senhaNova').value, s2 = $('#senhaNova2').value;
+  const msg = $('#senhaMsg'), btn = $('#btnTrocarSenha');
+  const mostrar = (texto, ok) => {
+    msg.textContent = texto;
+    msg.className = 'form-msg ' + (ok ? 'ok' : 'erro');
+    msg.hidden = false;
+  };
+  if (s1.length < 8) return mostrar('A senha precisa ter pelo menos 8 caracteres.', false);
+  if (s1 !== s2)     return mostrar('As duas senhas não são iguais. Confira e tente de novo.', false);
+  if (!sb)           return mostrar('Conexão com o Supabase não configurada.', false);
+
+  btn.disabled = true; btn.textContent = 'Trocando…';
+  try {
+    const { error } = await sb.auth.updateUser({ password: s1 });
+    if (error) throw error;
+    $('#formSenha').reset();
+    mostrar('✅ Senha trocada. Use a nova da próxima vez que entrar.', true);
+    toast('✅ Senha alterada com sucesso');
+  } catch (err) {
+    mostrar('⚠️ Não consegui trocar: ' + (err.message || 'erro desconhecido'), false);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Trocar senha';
+  }
+});
+
+/* Cadastro feito pelo SERVIDOR: no plano free o Supabase limita o e-mail de
+   confirmação, então signUp pela tela trava. E cadastro aberto num sistema com
+   dado de cliente seria porta destrancada — entra quem o dono cadastrou. */
+$('#formNovoMembro').addEventListener('submit', async e => {
+  e.preventDefault();
+  const f = e.target, btn = $('#btnNovoMembro');
+  btn.disabled = true; btn.textContent = 'Cadastrando…';
+  try {
+    const r = await api('/api/equipe', { method: 'POST', body: JSON.stringify({
+      nome:  f.nome.value.trim(),
+      email: f.email.value.trim(),
+      senha: f.senha.value,
+      papel: f.papel.value,
+    }) });
+    toast(`✅ ${r.nome} cadastrado — entregue o e-mail e a senha para a pessoa`);
+    if (r.aviso) toast('⚠️ ' + r.aviso);
+    f.reset();
+    await carregarEquipe();
+  } catch (err) {
+    toast('⚠️ ' + err.message);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Cadastrar';
+  }
+});
 
 /* ============================================================
    LOGIN — nada do CRM aparece antes de entrar

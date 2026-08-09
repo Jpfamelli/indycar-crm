@@ -85,6 +85,47 @@ const SERVICE_KEY       = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.S
 
 const CACHE_LOGIN = new Map();   // token -> { usuario, expira } | { negado, expira }
 
+/* Cliente com poderes de servidor (ignora RLS). Precisamos dele para mexer em
+   perfis, equipe e catálogo — coisas que a tela nunca pode fazer sozinha.
+   Fica guardado: criar um cliente novo a cada requisição é desperdício. */
+let SB_ADMIN = null;
+function adminSupabase() {
+  if (!SUPABASE_URL || !SERVICE_KEY) return null;
+  if (!SB_ADMIN) {
+    const { createClient } = require('@supabase/supabase-js');
+    SB_ADMIN = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
+  }
+  return SB_ADMIN;
+}
+
+/** Texto vindo de fora: só aceita string/número e corta no limite.
+    Objetos e arrays viram vazio, para não gravar lixo no banco. */
+function texto1(v, max) {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'object') return '';
+  return String(v).slice(0, max);
+}
+
+const ehUuid = v =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v ?? ''));
+
+/* Freio simples por usuário: um token válido (ou um script distraído) não
+   pode criar mil contas nem martelar o banco em segundos. */
+const USO = new Map();   // chave -> { qtd, zeraEm }
+
+function dentroDoLimite(chave, teto, janelaMs) {
+  const agora = Date.now();
+  const atual = USO.get(chave);
+  if (!atual || atual.zeraEm <= agora) {
+    if (USO.size > 500) USO.clear();
+    USO.set(chave, { qtd: 1, zeraEm: agora + janelaMs });
+    return true;
+  }
+  if (atual.qtd >= teto) return false;
+  atual.qtd++;
+  return true;
+}
+
 function validadeDoToken(token) {
   try {
     const [, carga] = token.split('.');
@@ -136,6 +177,109 @@ async function usuarioLogado(req) {
   } catch { return null; }
 }
 
+/* ------------------------------------------------------------
+   BASE COMPARTILHADA DE CLIENTES
+   A tabela `clientes` é a mesma da Agenda e do Atendimento. Aqui a
+   gente costura cliente + leads + agendamentos para montar a ficha
+   360: quanto já gastou, o que já fez e o histórico recente.
+   ------------------------------------------------------------ */
+const semAcento = s => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const normaliza = s => semAcento(s).replace(/[^a-z0-9]+/g, ' ').trim();
+const soDigitos  = s => String(s ?? '').replace(/\D/g, '');
+/* Chave de telefone: os últimos 8 dígitos. Ignora DDI, DDD escrito de jeitos
+   diferentes e o nono dígito que às vezes vem e às vezes não. */
+const chaveTel = s => { const d = soDigitos(s); return d.length >= 8 ? d.slice(-8) : d; };
+const nDinheiro = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+
+/** Lê clientes + leads + agendamentos de uma vez e devolve tudo já ligado. */
+async function carregarBaseClientes() {
+  const sb = adminSupabase();
+  if (!sb) throw new Error('Servidor sem a chave do banco configurada.');
+
+  const [rc, rl, ra] = await Promise.all([
+    sb.from('clientes')
+      .select('id,nome,telefone,email,carro_modelo,carro_ano,placa,origem,observacoes,created_at')
+      .order('nome'),
+    sb.from('leads')
+      .select('id,cliente_id,nome,telefone,servico,valor_orcado,valor_pago,status,origem,utm_campaign,observacoes,created_at,closed_at')
+      .order('created_at', { ascending: false }),
+    sb.from('agendamentos')
+      .select('id,cliente_id,lead_id,cliente_nome,telefone,servico,veiculo,placa,data,hora,status,valor,origem,compareceu,created_at')
+      .order('data', { ascending: false }),
+  ]);
+  for (const r of [rc, rl, ra]) if (r.error) throw new Error(r.error.message);
+
+  const clientes = rc.data || [], leads = rl.data || [], agendamentos = ra.data || [];
+
+  // índice por id e por telefone — registros antigos podem não ter cliente_id
+  const porId  = new Map(clientes.map(c => [c.id, c]));
+  const porTel = new Map();
+  for (const c of clientes) {
+    const k = chaveTel(c.telefone);
+    if (k && !porTel.has(k)) porTel.set(k, c);
+  }
+  const donoDe = r => {
+    if (r.cliente_id && porId.has(r.cliente_id)) return porId.get(r.cliente_id).id;
+    const k = chaveTel(r.telefone);
+    return (k && porTel.get(k)?.id) || null;
+  };
+
+  const fichas = new Map(clientes.map(c => [c.id, {
+    cliente: c, leads: [], agendamentos: [],
+    gasto: 0, emAberto: 0, servicos: new Map(), ultimoContato: c.created_at,
+  }]));
+
+  for (const l of leads) {
+    const id = donoDe(l);
+    const f = id && fichas.get(id);
+    if (!f) continue;
+    f.leads.push(l);
+    if (l.status === 'concluido') {
+      f.gasto += nDinheiro(l.valor_pago);
+      if (l.servico) f.servicos.set(l.servico, (f.servicos.get(l.servico) || 0) + 1);
+    } else if (l.status !== 'perdido') {
+      f.emAberto += nDinheiro(l.valor_orcado);
+    }
+    if (l.created_at > f.ultimoContato) f.ultimoContato = l.created_at;
+  }
+
+  for (const a of agendamentos) {
+    const id = donoDe(a);
+    const f = id && fichas.get(id);
+    if (!f) continue;
+    f.agendamentos.push(a);
+    if (a.status === 'concluido') {
+      // Agendamento que nasceu de um lead já teve o valor contado no lead
+      // (o gatilho copia o pago para lá). Somar de novo dobraria o gasto.
+      if (!a.lead_id) f.gasto += nDinheiro(a.valor);
+      if (a.servico) f.servicos.set(a.servico, (f.servicos.get(a.servico) || 0) + 1);
+    }
+    if (a.created_at > f.ultimoContato) f.ultimoContato = a.created_at;
+  }
+
+  return fichas;
+}
+
+/** Filtra a base por nome, telefone, placa ou carro — sem acento e sem pontuação. */
+function filtrarClientes(fichas, q) {
+  const termo = normaliza(q);
+  const dig = soDigitos(q);
+  const tel = dig.length >= 4 ? chaveTel(q) : null;
+  const placa = semAcento(q).replace(/[^a-z0-9]/g, '');
+
+  const lista = [...fichas.values()];
+  if (!termo) return lista;
+
+  return lista.filter(f => {
+    const c = f.cliente;
+    const texto = normaliza([c.nome, c.telefone, c.placa, c.carro_modelo, c.email].join(' '));
+    if (texto.includes(termo)) return true;
+    if (tel && chaveTel(c.telefone) === tel) return true;
+    if (placa && semAcento(c.placa).replace(/[^a-z0-9]/g, '').includes(placa)) return true;
+    return false;
+  });
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     // dentro do try: um Host malformado faria o parser de URL lançar
@@ -159,9 +303,11 @@ const server = http.createServer(async (req, res) => {
       }
 
       // Daqui para baixo, só com login válido.
-      if (!await usuarioLogado(req)) {
+      const quem = await usuarioLogado(req);
+      if (!quem) {
         return json(res, 401, { erro: 'Faça login para usar o CRM.' });
       }
+      const ehAdmin = quem.papel === 'admin';
 
       // GET /api/leads?status=&origem=&q=
       if (pathname === '/api/leads' && req.method === 'GET') {
@@ -209,8 +355,20 @@ const server = http.createServer(async (req, res) => {
         return json(res, resultado.ok ? 200 : 503, resultado);
       }
 
-      // POST /api/seed  → repopula dados de exemplo
+      /* POST /api/seed → APAGA TODOS OS LEADS e põe 10 de exemplo.
+         Isto existia liberado para qualquer pessoa logada, com um botão fixo na
+         barra lateral: um atendente clicava e os leads REAIS da oficina sumiam,
+         sem volta, no banco que o Atendimento e a Agenda também usam.
+         Agora: só admin, e só se a oficina ligar explicitamente no .env. */
       if (pathname === '/api/seed' && req.method === 'POST') {
+        if (!ehAdmin) {
+          return json(res, 403, { erro: 'Só o administrador pode repovoar os dados.' });
+        }
+        if (process.env.CRM_PERMITE_SEED !== '1') {
+          return json(res, 403, {
+            erro: 'Repovoar os dados está desligado — isto APAGA todos os leads. '
+                + 'Para liberar, defina CRM_PERMITE_SEED=1 no arquivo .env e reinicie.' });
+        }
         return json(res, 200, { ok: true, criados: await store.reseed() });
       }
 
@@ -228,6 +386,12 @@ const server = http.createServer(async (req, res) => {
         if (!store.CANAIS_INTEGRACAO.includes(canal)) {
           return json(res, 404, { erro: 'canal desconhecido' });
         }
+        // Credenciais de Meta e Google são segredo da oficina: só admin mexe.
+        if (req.method === 'PATCH' || req.method === 'DELETE') {
+          if (!ehAdmin) {
+            return json(res, 403, { erro: 'Só o administrador mexe nas integrações.' });
+          }
+        }
         if (req.method === 'PATCH') {
           return json(res, 200, await store.salvarIntegracao(canal, await readBody(req)));
         }
@@ -244,9 +408,230 @@ const server = http.createServer(async (req, res) => {
 
       // POST /api/metricas → grava investimento/cliques do mês (entrada manual)
       if (pathname === '/api/metricas' && req.method === 'POST') {
+        // mexe no investimento e, com ele, no ROI de todo mundo
+        if (!ehAdmin) {
+          return json(res, 403, { erro: 'Só o administrador registra investimento.' });
+        }
         const dados = await readBody(req);
         if (!dados || !dados.canal) return json(res, 400, { erro: 'informe o canal' });
         return json(res, 200, await store.salvarMetrica(dados));
+      }
+
+      /* ============================================================
+         MINHA CONTA — nome, e-mail e função de quem está logado
+         A senha NÃO passa por aqui: a tela troca direto no Supabase
+         Auth (sb.auth.updateUser). Servidor nenhum precisa vê-la.
+         ============================================================ */
+      if (pathname === '/api/perfil' && req.method === 'GET') {
+        const sb = adminSupabase();
+        if (!sb) return json(res, 503, { erro: 'Servidor sem a chave do banco configurada.' });
+        const { data, error } = await sb.from('perfis')
+          .select('id,nome,email,papel,ativo').eq('id', quem.id).maybeSingle();
+        if (error) return json(res, 500, { erro: error.message });
+        return json(res, 200, data || {
+          id: quem.id, nome: '', email: quem.email || '',
+          papel: quem.papel || 'atendente', ativo: true,
+        });
+      }
+
+      // PATCH /api/perfil → troca só o PRÓPRIO nome (o id vem do token, não do corpo)
+      if (pathname === '/api/perfil' && req.method === 'PATCH') {
+        const nome = texto1((await readBody(req)).nome, 80).trim();
+        if (!nome) return json(res, 400, { erro: 'Informe o seu nome.' });
+        const sb = adminSupabase();
+        if (!sb) return json(res, 503, { erro: 'Servidor sem a chave do banco configurada.' });
+        const { error } = await sb.from('perfis').update({ nome }).eq('id', quem.id);
+        if (error) return json(res, 500, { erro: error.message });
+        return json(res, 200, { ok: true, nome });
+      }
+
+      /* ============================================================
+         EQUIPE — mesmo login do Atendimento e da Agenda
+         Cadastro e corte de acesso exigem papel admin AQUI NO SERVIDOR:
+         esconder o botão na tela não protege nada.
+         ============================================================ */
+      if (pathname === '/api/equipe' && req.method === 'GET') {
+        const sb = adminSupabase();
+        if (!sb) return json(res, 503, { erro: 'Servidor sem a chave do banco configurada.' });
+        // quem não é admin enxerga apenas o próprio cadastro
+        let consulta = sb.from('perfis')
+          .select('id,nome,email,papel,ativo,created_at').order('created_at');
+        if (!ehAdmin) consulta = consulta.eq('id', quem.id);
+        const { data, error } = await consulta;
+        if (error) return json(res, 500, { erro: error.message });
+        return json(res, 200, { equipe: data || [], souAdmin: ehAdmin, meuId: quem.id });
+      }
+
+      if (pathname === '/api/equipe' && req.method === 'POST') {
+        if (!ehAdmin) return json(res, 403, { erro: 'Só o administrador cadastra a equipe.' });
+        if (!dentroDoLimite(`equipe:${quem.id}`, 10, 60_000)) {
+          return json(res, 429, { erro: 'Muitos cadastros seguidos. Espere um minuto.' });
+        }
+
+        const bruto = await readBody(req);
+        const nome  = texto1(bruto.nome, 80).trim();
+        const email = texto1(bruto.email, 160).trim().toLowerCase();
+        const senha = texto1(bruto.senha, 200);
+        const papel = bruto.papel === 'admin' ? 'admin' : 'atendente';
+
+        if (!nome) return json(res, 400, { erro: 'Informe o nome da pessoa.' });
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
+          return json(res, 400, { erro: 'Esse e-mail não parece válido.' });
+        }
+        if (senha.length < 8) {
+          return json(res, 400, { erro: 'A senha precisa ter pelo menos 8 caracteres.' });
+        }
+
+        const sb = adminSupabase();
+        if (!sb) return json(res, 503, { erro: 'Servidor sem a chave do banco configurada.' });
+
+        // email_confirm: já entra valendo, sem depender de e-mail de confirmação
+        const { data, error } = await sb.auth.admin.createUser({
+          email, password: senha, email_confirm: true, user_metadata: { nome },
+        });
+        if (error) {
+          const jaExiste = /already been registered|already exists/i.test(error.message);
+          return json(res, jaExiste ? 409 : 400, {
+            erro: jaExiste ? 'Já existe alguém cadastrado com esse e-mail.' : error.message });
+        }
+
+        // o gatilho do banco cria o perfil; aqui só acertamos nome e papel
+        const { error: erroPerfil } = await sb.from('perfis')
+          .update({ nome, papel, ativo: true }).eq('id', data.user.id);
+        if (erroPerfil) {
+          return json(res, 200, { ok: true, id: data.user.id, nome, email, papel,
+            aviso: 'Usuário criado, mas não consegui ajustar o perfil: ' + erroPerfil.message });
+        }
+        return json(res, 201, { ok: true, id: data.user.id, nome, email, papel });
+      }
+
+      /* ---- Equipe: ligar/desligar o acesso de alguém ---- */
+      if (pathname === '/api/equipe/ativo' && req.method === 'POST') {
+        if (!ehAdmin) return json(res, 403, { erro: 'Só o administrador faz isso.' });
+
+        const bruto = await readBody(req);
+        const id = texto1(bruto.id, 60);
+        if (!ehUuid(id)) return json(res, 400, { erro: 'Informe quem você quer alterar.' });
+        if (id === quem.id) {
+          return json(res, 400, { erro: 'Você não pode desligar o próprio acesso.' });
+        }
+        const sb = adminSupabase();
+        if (!sb) return json(res, 503, { erro: 'Servidor sem a chave do banco configurada.' });
+
+        const { error } = await sb.from('perfis')
+          .update({ ativo: bruto.ativo === true }).eq('id', id);
+        if (error) return json(res, 500, { erro: error.message });
+        return json(res, 200, { ok: true, ativo: bruto.ativo === true });
+      }
+
+      /* ============================================================
+         CLIENTES — a base compartilhada com a Agenda e o Atendimento
+         ============================================================ */
+      // GET /api/clientes?q= → lista resumida (gasto, serviços, último contato)
+      if (pathname === '/api/clientes' && req.method === 'GET') {
+        try {
+          const busca = url.searchParams.get('q') || '';
+          const fichas = await carregarBaseClientes();
+          const lista = filtrarClientes(fichas, busca)
+            .map(f => ({
+              id: f.cliente.id,
+              nome: f.cliente.nome,
+              telefone: f.cliente.telefone,
+              carro_modelo: f.cliente.carro_modelo,
+              placa: f.cliente.placa,
+              origem: f.cliente.origem,
+              gasto: Math.round(f.gasto * 100) / 100,
+              emAberto: Math.round(f.emAberto * 100) / 100,
+              servicos: f.servicos.size,
+              leads: f.leads.length,
+              agendamentos: f.agendamentos.length,
+              ultimoContato: f.ultimoContato,
+            })
+            // quem gastou mais aparece primeiro; empate desempata pelo contato recente
+            ).sort((a, b) => b.gasto - a.gasto ||
+                   String(b.ultimoContato).localeCompare(String(a.ultimoContato)));
+
+          /* Dois pares de números, nunca misturados: o da BUSCA e o da BASE.
+             Antes vinha "total" da base inteira com o "faturamento" só do que a
+             busca devolveu — e a tela dividia um pelo outro. Buscar "Maria"
+             mostrava o gasto das Marias dividido por 84 clientes. */
+          const somar = (arr) => Math.round(arr.reduce((s, c) => s + c.gasto, 0) * 100) / 100;
+          const todos = [...fichas.values()].map(f => ({ gasto: f.gasto }));
+
+          return json(res, 200, {
+            clientes: lista,
+            filtrado: !!busca.trim(),
+            // o que a busca devolveu
+            total: lista.length,
+            faturamento: somar(lista),
+            // a base inteira, para o rótulo "de X clientes"
+            totalBase: fichas.size,
+            faturamentoBase: somar(todos),
+          });
+        } catch (e) { return json(res, 503, { erro: e.message }); }
+      }
+
+      // GET /api/clientes/:id → ficha 360 de um cliente
+      const mc = pathname.match(/^\/api\/clientes\/([0-9a-fA-F-]{36})$/);
+      if (mc && req.method === 'GET') {
+        if (!ehUuid(mc[1])) return json(res, 400, { erro: 'cliente inválido' });
+        try {
+          const fichas = await carregarBaseClientes();
+          const f = fichas.get(mc[1]);
+          if (!f) return json(res, 404, { erro: 'cliente não encontrado' });
+
+          const concluidos = f.leads.filter(l => l.status === 'concluido').length;
+          return json(res, 200, {
+            cliente: f.cliente,
+            resumo: {
+              gasto: Math.round(f.gasto * 100) / 100,
+              emAberto: Math.round(f.emAberto * 100) / 100,
+              servicosFeitos: [...f.servicos.values()].reduce((s, n) => s + n, 0),
+              leads: f.leads.length,
+              ganhos: concluidos,
+              agendamentos: f.agendamentos.length,
+              ticket: concluidos ? Math.round((f.gasto / concluidos) * 100) / 100 : 0,
+            },
+            servicos: [...f.servicos.entries()]
+              .map(([nome, vezes]) => ({ nome, vezes }))
+              .sort((a, b) => b.vezes - a.vezes || a.nome.localeCompare(b.nome)),
+            leads: f.leads.slice(0, 10),
+            agendamentos: f.agendamentos.slice(0, 10),
+          });
+        } catch (e) { return json(res, 503, { erro: e.message }); }
+      }
+
+      /* ============================================================
+         CATÁLOGO DE SERVIÇOS — é o que a IA usa para responder o cliente
+         ============================================================ */
+      if (pathname === '/api/catalogo' && req.method === 'GET') {
+        const sb = adminSupabase();
+        if (!sb) return json(res, 503, { erro: 'Servidor sem a chave do banco configurada.' });
+        const { data, error } = await sb.from('catalogo_servicos')
+          .select('id,categoria,servico,escopo,fazemos,tipo_veiculo,observacao')
+          .order('categoria', { ascending: true })
+          .order('servico', { ascending: true });
+        if (error) return json(res, 500, { erro: error.message });
+        return json(res, 200, { servicos: data || [], souAdmin: ehAdmin });
+      }
+
+      // PATCH /api/catalogo/:id → liga/desliga o "fazemos". Só admin.
+      const mcat = pathname.match(/^\/api\/catalogo\/([0-9a-fA-F-]{36})$/);
+      if (mcat && req.method === 'PATCH') {
+        if (!ehAdmin) return json(res, 403, { erro: 'Só o administrador muda o catálogo.' });
+        if (!ehUuid(mcat[1])) return json(res, 400, { erro: 'serviço inválido' });
+        const bruto = await readBody(req);
+        if (typeof bruto.fazemos !== 'boolean') {
+          return json(res, 400, { erro: 'informe fazemos: true ou false' });
+        }
+        const sb = adminSupabase();
+        if (!sb) return json(res, 503, { erro: 'Servidor sem a chave do banco configurada.' });
+        const { data, error } = await sb.from('catalogo_servicos')
+          .update({ fazemos: bruto.fazemos }).eq('id', mcat[1])
+          .select('id,categoria,servico,escopo,fazemos,tipo_veiculo,observacao').maybeSingle();
+        if (error) return json(res, 500, { erro: error.message });
+        if (!data) return json(res, 404, { erro: 'serviço não encontrado' });
+        return json(res, 200, { ok: true, servico: data });
       }
 
       return json(res, 404, { erro: 'rota não encontrada' });
