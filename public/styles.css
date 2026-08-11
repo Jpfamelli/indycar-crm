@@ -528,13 +528,23 @@ option{background:var(--pop-solid);color:var(--texto)}
   margin:22px 0 8px;padding-top:18px;border-top:1px solid var(--line)}
 .aviso{color:var(--gray-2);font-size:.82rem;margin-top:10px;line-height:1.55}
 .equipe{display:flex;flex-direction:column;gap:9px}
-.equipe-item{display:flex;align-items:center;gap:11px;padding:10px;border-radius:10px;
-  background:var(--superficie)}
+/* wrap: com o seletor de função e o botão de acesso na mesma linha, num
+   cartão estreito o botão vazava para fora em vez de descer. */
+.equipe-item{display:flex;align-items:center;flex-wrap:wrap;gap:9px 11px;padding:10px;
+  border-radius:10px;background:var(--superficie)}
 .equipe-item .avatar{width:36px;height:36px;font-size:.92rem}
-.equipe-txt{flex:1;min-width:0}
+.equipe-txt{flex:1 1 140px;min-width:0}
 .equipe-txt small{color:var(--gray-2);font-size:.78rem}
+.equipe-txt .voce{font-style:normal;font-size:.76rem;font-weight:600;color:var(--gray-2)}
 .equipe-item.inativo{opacity:.55}
 .equipe-item.inativo strong{text-decoration:line-through}
+/* Função de cada pessoa: seletor para o admin, texto simples para os outros */
+.equipe-papel{flex:none;padding:6px 9px;border-radius:9px;border:1px solid var(--line);
+  background:var(--card-2);color:var(--texto);font-family:var(--font);font-size:.8rem;
+  cursor:pointer;transition:border-color .2s,box-shadow .2s}
+.equipe-papel:focus{outline:none;border-color:var(--red);box-shadow:0 0 0 3px rgba(229,9,20,.16)}
+.equipe-papel:disabled{opacity:.55;cursor:wait}
+.equipe-papel-txt{flex:none;font-size:.8rem;color:var(--gray-2)}
 
 /* ================= RESPONSIVO ================= */
 @media (max-width:1100px){
@@ -584,8 +594,16 @@ option{background:var(--pop-solid);color:var(--texto)}
 /* ================= LOGIN =================
    Cobre a tela inteira até o atendente entrar. O app só aparece
    depois — nada de dados de cliente antes da senha. */
+/* A capa ROLA. O formulário de primeiro acesso tem quatro campos e não cabe
+   numa janela baixa — sem rolagem o botão de criar a conta ficava abaixo da
+   dobra e não havia como terminar o cadastro.
+   `safe center`: centraliza enquanto cabe e volta a alinhar pelo topo quando
+   não cabe. Com `center` puro, num contêiner que rola, o excedente sai por
+   CIMA e nem rolando se alcança o começo do formulário. */
 .login-capa{
-  position:fixed;inset:0;z-index:9999;display:grid;place-items:center;padding:24px;
+  position:fixed;inset:0;z-index:9999;display:grid;padding:24px;
+  justify-items:center;align-items:center;align-items:safe center;
+  overflow-y:auto;overscroll-behavior:contain;
   background:var(--black);
   background-image:
     radial-gradient(900px 500px at 85% -10%, rgba(229,9,20,.16), transparent 60%),
@@ -618,6 +636,28 @@ option{background:var(--pop-solid);color:var(--texto)}
 .login-erro{
   background:rgba(229,9,20,.12);border:1px solid rgba(229,9,20,.4);border-radius:9px;
   padding:11px 13px;font-size:13.5px;color:var(--vermelho-txt);
+}
+/* "Vamos começar!" é uma frase, não uma sigla: no corpo de 44px do h1 do
+   login ela quebrava em três linhas dentro do cartão de 420px. */
+.login-titulo-2{
+  font-family:var(--font-cond);font-size:32px;font-weight:800;letter-spacing:.5px;
+  line-height:1.05;margin-top:-2px;
+}
+/* Vai e volta entre "entrar" e "criar minha conta" */
+.login-link{
+  align-self:center;background:none;border:none;padding:3px;cursor:pointer;
+  font-family:var(--font);font-size:13px;color:var(--gray);
+  text-decoration:underline;text-underline-offset:3px;transition:color .18s var(--ease);
+}
+.login-link:hover{color:var(--texto)}
+/* Janela baixa (notebook antigo, celular deitado): aperta o cartão para o
+   botão continuar alcançável com pouca ou nenhuma rolagem. */
+@media (max-height:640px){
+  .login-capa{padding:14px}
+  .login-caixa{padding:22px 22px;gap:12px}
+  .login-caixa h1{font-size:32px}
+  .login-titulo-2{font-size:26px}
+  .login-marca{font-size:24px}
 }
 /* Enquanto não entrar, o app fica escondido atrás da capa */
 body.deslogado .sidebar,body.deslogado main{visibility:hidden}

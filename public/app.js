@@ -975,19 +975,47 @@ async function carregarEquipe() {
     $('#blocoCadastro').hidden = !SOU_ADMIN;
     $('#avisoCadastro').hidden = SOU_ADMIN;
 
-    el.innerHTML = lista.length ? lista.map(p => `
+    el.innerHTML = lista.length ? lista.map(p => {
+      const papel = p.papel === 'admin' ? 'admin' : 'atendente';
+      return `
       <div class="equipe-item${p.ativo ? '' : ' inativo'}">
         <span class="avatar">${esc(iniciais(p.nome))}</span>
         <div class="equipe-txt">
-          <strong>${esc(p.nome)}</strong><br>
-          <small>${esc(p.email)} · ${esc(LABEL_PAPEL[p.papel] ?? p.papel)}${p.ativo ? '' : ' · sem acesso'}</small>
+          <strong>${esc(p.nome)}</strong>${p.id === r.meuId ? ' <em class="voce">(você)</em>' : ''}<br>
+          <small>${esc(p.email)}${p.ativo ? '' : ' · sem acesso'}</small>
         </div>
+        ${SOU_ADMIN
+          ? `<select class="equipe-papel" data-papel="${esc(p.id)}" data-antes="${papel}"
+                title="O que esta pessoa pode fazer">
+               <option value="atendente"${papel === 'admin' ? '' : ' selected'}>Atendente</option>
+               <option value="admin"${papel === 'admin' ? ' selected' : ''}>Administrador</option>
+             </select>`
+          : `<span class="equipe-papel-txt">${esc(LABEL_PAPEL[papel])}</span>`}
         ${SOU_ADMIN && p.id !== r.meuId
           ? `<button type="button" class="btn btn-ghost sm" data-membro="${esc(p.id)}"
                 data-ativar="${p.ativo ? '0' : '1'}">${p.ativo ? 'Tirar acesso' : 'Devolver acesso'}</button>`
           : ''}
-      </div>`).join('')
+      </div>`;
+    }).join('')
       : '<div class="vazio">Só você por enquanto.</div>';
+
+    /* Trocar a função de alguém. O servidor recusa rebaixar o último
+       administrador — sem isso dá para se trancar para fora do próprio CRM. */
+    $$('#listaEquipe [data-papel]').forEach(s => s.addEventListener('change', async () => {
+      const antes = s.dataset.antes;
+      s.disabled = true;
+      try {
+        await api('/api/equipe/papel', { method: 'POST',
+          body: JSON.stringify({ id: s.dataset.papel, papel: s.value }) });
+        toast(s.value === 'admin' ? '✅ Agora é administrador' : '✅ Agora é atendente');
+        // mudar o próprio papel muda o que a tela mostra: recarrega tudo
+        if (s.dataset.papel === r.meuId) { location.reload(); return; }
+        await carregarEquipe();
+      } catch (err) {
+        toast('⚠️ ' + err.message);
+        s.value = antes; s.disabled = false;      // volta para a função que era antes
+      }
+    }));
 
     // ligar/desligar o acesso de alguém
     $$('#listaEquipe [data-membro]').forEach(b => b.addEventListener('click', async () => {
@@ -1092,7 +1120,8 @@ function mostrarLogin(mensagem) {
   document.body.classList.add('deslogado');
   $('#telaLogin').hidden = false;
   const erro = $('#erroLogin');
-  if (mensagem) { erro.textContent = mensagem; erro.hidden = false; }
+  // recado de login só se lê no formulário de login: traz ele de volta
+  if (mensagem) { mostrarFormPrimeiro(false); erro.textContent = mensagem; erro.hidden = false; }
   else { erro.hidden = true; }
 }
 
@@ -1126,6 +1155,74 @@ $('#formLogin').addEventListener('submit', async e => {
   }
 });
 
+/* ============================================================
+   PRIMEIRO ACESSO — a conta do dono, antes de existir alguém
+   O botão só aparece enquanto o sistema não tem NINGUÉM cadastrado;
+   quem criar a primeira conta vira administrador. Depois disso a
+   rota do servidor responde 403 e a tela some.
+   Não usa sb.auth.signUp: ele exige confirmação por e-mail e recusa
+   endereço de domínio próprio ("Email address is invalid"). Quem cria
+   é o servidor, com a chave de serviço, e a conta já entra valendo.
+   ============================================================ */
+function mostrarFormPrimeiro(mostrar) {
+  $('#formLogin').hidden    = mostrar;
+  $('#formPrimeiro').hidden = !mostrar;
+}
+
+async function verPrimeiroAcesso() {
+  try {
+    const j = await (await fetch('/api/primeiro-acesso')).json();
+    $('#btnCriarConta').hidden = !j.aberto;
+    if (j.aberto) mostrarFormPrimeiro(true);
+  } catch { /* servidor fora do ar: a tela de login normal já avisa */ }
+}
+
+$('#btnCriarConta').addEventListener('click', () => mostrarFormPrimeiro(true));
+$('#btnVoltarLogin').addEventListener('click', () => mostrarFormPrimeiro(false));
+
+$('#formPrimeiro').addEventListener('submit', async e => {
+  e.preventDefault();
+  const erro = $('#pnErro'), btn = $('#btnPrimeiro');
+  const falha = m => { erro.textContent = m; erro.hidden = false; };
+  erro.hidden = true;
+
+  const nome  = $('#pnNome').value.trim();
+  const email = $('#pnEmail').value.trim().toLowerCase();
+  const senha = $('#pnSenha').value;
+  if (!nome)            return falha('Escreva o seu nome.');
+  if (senha.length < 8) return falha('A senha precisa ter pelo menos 8 caracteres.');
+  if (senha !== $('#pnSenha2').value) {
+    return falha('As duas senhas não são iguais. Confira e digite de novo.');
+  }
+
+  btn.disabled = true; btn.textContent = 'CRIANDO…';
+  try {
+    // sem token ainda: esta é a única rota do CRM que roda sem login
+    const r = await fetch('/api/primeiro-acesso', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nome, email, senha }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.erro || 'Não consegui criar a conta.');
+
+    // já entra, sem obrigar a digitar tudo de novo
+    if (!sb) throw new Error('Conexão com o Supabase não configurada.');
+    const { error } = await sb.auth.signInWithPassword({ email, password: senha });
+    if (error) {
+      mostrarFormPrimeiro(false);
+      toast('✅ Conta criada! Entre com o seu e-mail e a senha.');
+      return;
+    }
+    $('#pnSenha').value = ''; $('#pnSenha2').value = '';
+    esconderLogin();
+    await carregar();
+  } catch (err) {
+    falha(err.message);
+  } finally {
+    btn.disabled = false; btn.textContent = 'CRIAR MINHA CONTA';
+  }
+});
+
 /* ---------------- Boot ---------------- */
 (async function iniciar() {
   mostrarLogin();                       // capa primeiro: nada vaza antes da senha
@@ -1149,5 +1246,8 @@ $('#formLogin').addEventListener('submit', async e => {
     esconderLogin();
     try { await carregar(); }
     catch (err) { mostrarLogin(err.message); }
+  } else {
+    // ninguém logado: pode ser a primeira vez que o sistema abre
+    await verPrimeiroAcesso();
   }
 })();

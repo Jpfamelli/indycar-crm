@@ -424,8 +424,8 @@
             </form>
           </div>
 
-          <p class="aviso" id="avisoCadastro" hidden>Só o administrador cadastra novos funcionários
-            e liga ou desliga acessos.</p>
+          <p class="aviso" id="avisoCadastro" hidden>Só o administrador cadastra novos funcionários,
+            muda a função de cada um e liga ou desliga acessos.</p>
         </div>
 
         <div class="card">
@@ -502,6 +502,34 @@
     </label>
     <button type="submit" class="btn-entrar" id="btnEntrar">ENTRAR</button>
     <p class="login-erro" id="erroLogin" hidden></p>
+    <button type="button" class="login-link" id="btnCriarConta" hidden>Primeiro acesso? Criar minha conta</button>
+  </form>
+
+  <!-- Primeiro acesso: só aparece enquanto NÃO existir ninguém cadastrado.
+       Quem criar esta conta vira o administrador dos três sistemas. -->
+  <form id="formPrimeiro" class="login-caixa" novalidate hidden>
+    <span class="brand-mark login-marca"><span class="bm-indy">INDY</span><span class="bm-car">CAR</span></span>
+    <h1 class="login-titulo-2">Vamos começar!</h1>
+    <p class="login-sub">Ninguém foi cadastrado ainda. Crie a sua conta de administrador —
+      ela vale para o CRM, a agenda e o atendimento.</p>
+    <label>Seu nome
+      <input id="pnNome" maxlength="80" required placeholder="Ex.: João Pedro" autocomplete="name" />
+    </label>
+    <label>Seu e-mail
+      <input id="pnEmail" type="email" required maxlength="160"
+             placeholder="voce@indycartaubate.com" autocomplete="email" />
+    </label>
+    <label>Crie uma senha
+      <input id="pnSenha" type="password" required minlength="8" maxlength="200"
+             placeholder="pelo menos 8 caracteres" autocomplete="new-password" />
+    </label>
+    <label>Repita a senha
+      <input id="pnSenha2" type="password" required minlength="8" maxlength="200"
+             placeholder="digite a mesma senha" autocomplete="new-password" />
+    </label>
+    <button type="submit" class="btn-entrar" id="btnPrimeiro">CRIAR MINHA CONTA</button>
+    <p class="login-erro" id="pnErro" hidden></p>
+    <button type="button" class="login-link" id="btnVoltarLogin">Já tenho conta — entrar</button>
   </form>
 </div>
 
