@@ -156,8 +156,6 @@ async function carregar() {
   /* Esconde o que só admin usa. É só apresentação — o servidor devolve 403
      de qualquer forma; isto evita o atendente clicar e levar erro na cara.
      O "Dados de exemplo" APAGA todos os leads: fora da vista de quem não pode. */
-  const btnSeed = $('#btnSeed');
-  if (btnSeed) btnSeed.hidden = !SOU_ADMIN;
   const navInteg = $('.nav-item[data-view="integracoes"]');
   if (navInteg) navInteg.hidden = !SOU_ADMIN;
 
@@ -494,15 +492,12 @@ $('#btnIA').addEventListener('click', async () => {
   btn.textContent = '✨ Gerar resumo da semana';
 });
 
-/* ---------------- Seed ---------------- */
-$('#btnSeed').addEventListener('click', async () => {
-  if (!confirm('Isso apaga os dados atuais e recria exemplos. Continuar?')) return;
-  try {
-    const r = await api('/api/seed', { method: 'POST' });
-    toast(`↻ ${r.criados} leads de exemplo criados`);
-    await carregar();
-  } catch (err) { toast('⚠️ ' + err.message); }
-});
+/* O botão de "repovoar com exemplos" foi removido.
+   Ele apagava TODOS os leads para inserir 10 inventados — e foi o que encheu
+   o CRM de 56 cadastros falsos (o mesmo nome com telefones diferentes,
+   "Aline Gomes" três vezes). Com a oficina atendendo de verdade, um clique
+   errado apagaria cliente real, no banco que o Atendimento e a Agenda também
+   usam. Dado de exemplo não tem lugar em sistema em produção. */
 
 /* ============================================================
    INTEGRAÇÕES — Meta Ads / Google Ads + ROI por canal

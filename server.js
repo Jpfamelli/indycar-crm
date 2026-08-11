@@ -417,21 +417,19 @@ const server = http.createServer(async (req, res) => {
         return json(res, resultado.ok ? 200 : 503, resultado);
       }
 
-      /* POST /api/seed → APAGA TODOS OS LEADS e põe 10 de exemplo.
-         Isto existia liberado para qualquer pessoa logada, com um botão fixo na
-         barra lateral: um atendente clicava e os leads REAIS da oficina sumiam,
-         sem volta, no banco que o Atendimento e a Agenda também usam.
-         Agora: só admin, e só se a oficina ligar explicitamente no .env. */
+      /* /api/seed foi REMOVIDA de propósito.
+         Ela apagava TODOS os leads para inserir 10 de exemplo. Foi o que
+         encheu o CRM de 56 cadastros inventados, misturados aos reais —
+         mesmo nome com vários telefones, telefone com espaço sobrando.
+         Ficava atrás de admin + CRM_PERMITE_SEED=1, mas com a oficina
+         atendendo de verdade não existe motivo para essa porta continuar
+         no prédio: o banco é o mesmo do Atendimento e da Agenda, e não há
+         desfazer. Se um dia precisar de massa de teste, use um projeto
+         Supabase separado. */
       if (pathname === '/api/seed' && req.method === 'POST') {
-        if (!ehAdmin) {
-          return json(res, 403, { erro: 'Só o administrador pode repovoar os dados.' });
-        }
-        if (process.env.CRM_PERMITE_SEED !== '1') {
-          return json(res, 403, {
-            erro: 'Repovoar os dados está desligado — isto APAGA todos os leads. '
-                + 'Para liberar, defina CRM_PERMITE_SEED=1 no arquivo .env e reinicie.' });
-        }
-        return json(res, 200, { ok: true, criados: await store.reseed() });
+        return json(res, 410, {
+          erro: 'Esta função saiu do sistema. Ela apagava todos os leads para '
+              + 'criar exemplos, e o CRM agora tem cliente de verdade.' });
       }
 
       // ---------- Integrações de mídia (Meta Ads / Google Ads) ----------
@@ -788,6 +786,9 @@ server.listen(PORT, HOST, () => {
       console.log('         (copie o .env.exemplo se ele não existir)');
     }
   }
+  /* O aviso dizia "sem autenticação" — sobra de quando o CRM era aberto.
+     Hoje toda rota /api exige login, e o recado errado no console é pior
+     que recado nenhum: sugere um buraco que não existe e desvia a atenção. */
   if (HOST === '127.0.0.1') console.log('   (acessível só neste computador)\n');
-  else console.log(`   ⚠️  exposto na rede em ${HOST} — sem autenticação\n`);
+  else console.log(`   🔒 exposto em ${HOST} — acesso só com login\n`);
 });
