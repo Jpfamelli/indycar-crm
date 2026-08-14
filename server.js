@@ -173,6 +173,9 @@ async function usuarioLogado(req) {
     if (!p.ok) return negar();
     const [perfil] = await p.json();
     if (!perfil?.ativo) return negar();
+    /* Papel 'agenda' (ex.: Franklin): só marca presença na Agenda. No CRM ele
+       não entra — nada de métricas, leads nem ficha de cliente. */
+    if (perfil.papel === 'agenda') return negar();
     usuario.papel = perfil.papel;
 
     if (CACHE_LOGIN.size > 500) CACHE_LOGIN.clear();
@@ -536,7 +539,7 @@ const server = http.createServer(async (req, res) => {
         const nome  = texto1(bruto.nome, 80).trim();
         const email = texto1(bruto.email, 160).trim().toLowerCase();
         const senha = texto1(bruto.senha, 200);
-        const papel = bruto.papel === 'admin' ? 'admin' : 'atendente';
+        const papel = ['admin', 'agenda'].includes(bruto.papel) ? bruto.papel : 'atendente'; // 'agenda' = so presenca
 
         if (!nome) return json(res, 400, { erro: 'Informe o nome da pessoa.' });
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
@@ -575,7 +578,7 @@ const server = http.createServer(async (req, res) => {
 
         const bruto = await readBody(req);
         const id    = texto1(bruto.id, 60);
-        const papel = bruto.papel === 'admin' ? 'admin' : 'atendente';
+        const papel = ['admin', 'agenda'].includes(bruto.papel) ? bruto.papel : 'atendente'; // 'agenda' = so presenca
         if (!ehUuid(id)) return json(res, 400, { erro: 'Informe quem você quer alterar.' });
 
         const sb = adminSupabase();
