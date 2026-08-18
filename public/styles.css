@@ -153,6 +153,8 @@ button,input,select,textarea{font-family:inherit;color:inherit}
 .bm-car{color:#fff;background:linear-gradient(135deg,var(--red),var(--red-dark));padding:1px 8px;margin-left:5px;
   display:inline-block;transform:skewX(-10deg);border-radius:3px;box-shadow:0 0 16px var(--red-glow)}
 .brand-sub{font-family:var(--font-cond);font-weight:600;font-size:.6rem;letter-spacing:.3em;color:var(--gray);margin-top:8px}
+.brand-slogan{font-family:var(--font-cond);font-style:italic;font-weight:600;font-size:.72rem;
+  color:var(--vermelho-txt);margin-top:4px;letter-spacing:.04em}
 
 .nav{display:flex;flex-direction:column;gap:4px;overflow-y:auto}
 .nav-item{
@@ -246,8 +248,16 @@ button,input,select,textarea{font-family:inherit;color:inherit}
 .fm-row{display:flex;align-items:center;gap:11px}
 .fm-name{font-family:var(--font-cond);font-weight:600;font-size:.92rem;width:96px;flex:none;text-transform:capitalize;color:var(--gray)}
 .fm-bar{flex:1;height:22px;background:var(--superficie);border-radius:6px;overflow:hidden}
-.fm-fill{height:100%;background:linear-gradient(90deg,var(--red),var(--red-dark));border-radius:6px;
-  transition:width .8s var(--ease);min-width:2px}
+/* barra do funil na COR da etapa — mesma paleta do kanban e dos badges */
+.fm-fill{height:100%;background:linear-gradient(90deg,var(--fm-cor,var(--red)),color-mix(in srgb,var(--fm-cor,var(--red)) 60%,#000));
+  border-radius:6px;transition:width .8s var(--ease);min-width:2px}
+.fm-row[data-etapa="novo"]{--fm-cor:#3b82f6}
+.fm-row[data-etapa="contato"]{--fm-cor:#8b5cf6}
+.fm-row[data-etapa="orcamento"]{--fm-cor:#f59e0b}
+.fm-row[data-etapa="agendado"]{--fm-cor:#06b6d4}
+.fm-row[data-etapa="em_servico"]{--fm-cor:var(--red)}
+.fm-row[data-etapa="concluido"]{--fm-cor:#22c55e}
+.fm-row[data-etapa="perdido"]{--fm-cor:#787882}
 .fm-num{font-family:var(--font-cond);font-weight:700;width:30px;text-align:right;flex:none}
 
 /* ================= ORIGEM ================= */
@@ -311,12 +321,28 @@ button,input,select,textarea{font-family:inherit;color:inherit}
 
 /* ================= KANBAN ================= */
 .kanban{display:grid;grid-template-columns:repeat(7,minmax(200px,1fr));gap:12px;overflow-x:auto;padding-bottom:14px}
-.kb-col{background:var(--superficie);border:1px solid var(--line);border-radius:12px;padding:12px;min-height:210px}
+/* Cada coluna carrega a COR da etapa (mesma dos badges): dá para ler o funil
+   de longe, sem precisar ler os títulos. A cor entra num friso no topo e num
+   sopro no contador — o resto continua neutro para não virar carnaval. */
+.kb-col{background:var(--superficie);border:1px solid var(--line);border-radius:12px;padding:12px;min-height:210px;
+  position:relative;overflow:hidden;--kb-cor:var(--line)}
+.kb-col::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;
+  background:linear-gradient(90deg,var(--kb-cor),transparent 85%)}
+.kb-col[data-etapa="novo"]{--kb-cor:#3b82f6}
+.kb-col[data-etapa="contato"]{--kb-cor:#8b5cf6}
+.kb-col[data-etapa="orcamento"]{--kb-cor:#f59e0b}
+.kb-col[data-etapa="agendado"]{--kb-cor:#06b6d4}
+.kb-col[data-etapa="em_servico"]{--kb-cor:var(--red)}
+.kb-col[data-etapa="concluido"]{--kb-cor:#22c55e}
+.kb-col[data-etapa="perdido"]{--kb-cor:#787882}
 .kb-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:11px;
   font-family:var(--font-cond);font-weight:700;text-transform:uppercase;letter-spacing:.06em;font-size:.85rem}
-.kb-count{background:var(--superficie-2);padding:2px 8px;border-radius:20px;font-size:.76rem}
+.kb-count{background:var(--superficie-2);padding:2px 8px;border-radius:20px;font-size:.76rem;
+  box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--kb-cor) 45%,transparent)}
 .kb-card{background:linear-gradient(160deg,var(--card-2),var(--card));border:1px solid var(--line);
-  border-radius:9px;padding:11px;margin-bottom:9px;cursor:pointer;transition:.22s var(--ease)}
+  border-radius:9px;padding:11px;margin-bottom:9px;cursor:pointer;transition:.22s var(--ease);
+  /* depois do shorthand: o filete esquerdo herda a cor da etapa da coluna */
+  border-left:3px solid color-mix(in srgb,var(--kb-cor) 55%,transparent)}
 .kb-card:hover{transform:translateY(-3px);border-color:rgba(229,9,20,.55);box-shadow:var(--sombra-hover)}
 .kb-nome{font-weight:600;font-size:.9rem}
 .kb-meta{color:var(--gray-2);font-size:.77rem;margin-top:3px}
@@ -562,7 +588,7 @@ option{background:var(--pop-solid);color:var(--texto)}
   .sidebar{width:100%;height:auto;position:static;flex-direction:row;align-items:center;
     gap:10px;padding:12px 14px;overflow:visible}
   .brand{margin:0;flex:none;padding:0}
-  .brand-sub{display:none}
+  .brand-sub,.brand-slogan{display:none}
   .brand-mark{font-size:1.15rem}
   /* flex-start, não flex-end: com o alinhamento à direita o excesso vazava
      para a ESQUERDA, onde não existe rolagem — a aba Dashboard ficava fora

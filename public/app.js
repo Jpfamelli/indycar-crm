@@ -248,7 +248,7 @@ function renderDashboard() {
   // funil
   const max = Math.max(...Object.values(g.porStatus), 1);
   $('#funnelMini').innerHTML = STATUSES.map(st => `
-    <div class="fm-row"><span class="fm-name">${LABEL_STATUS[st]}</span>
+    <div class="fm-row" data-etapa="${st}"><span class="fm-name">${LABEL_STATUS[st]}</span>
       <div class="fm-bar"><div class="fm-fill" style="width:${(g.porStatus[st] / max) * 100}%"></div></div>
       <span class="fm-num">${g.porStatus[st]}</span></div>`).join('');
 
@@ -290,7 +290,7 @@ function renderKanban() {
   $('#kanban').innerHTML = STATUSES.map(st => {
     // o funil mostra o pipeline inteiro — filtro da aba Leads não se aplica aqui
     const its = TODOS.filter(l => l.status === st);
-    return `<div class="kb-col">
+    return `<div class="kb-col" data-etapa="${esc(st)}">
       <div class="kb-head"><span>${esc(LABEL_STATUS[st] ?? st)}</span><span class="kb-count">${its.length}</span></div>
       ${its.map(l => `<div class="kb-card" data-id="${l.id}">
         <div class="kb-nome">${esc(l.nome)}</div>
