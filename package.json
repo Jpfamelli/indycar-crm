@@ -5,7 +5,9 @@
   "private": true,
   "scripts": {
     "start": "node server.js",
-    "seed": "node -e \"require('./db').reseed(); console.log('Banco populado com dados de exemplo.')\""
+    "seed": "node -e \"require('./db').reseed(); console.log('Banco populado com dados de exemplo.')\"",
+    "test": "node --test --test-isolation=none",
+    "mock": "node scripts/mock-server.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",

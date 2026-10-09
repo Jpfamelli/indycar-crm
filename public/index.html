@@ -84,6 +84,7 @@
     </button>
   </nav>
 
+  <label class="ecossistema">Ecossistema IndyCar<select id="ecossistema" aria-label="Abrir outro sistema"><option value="">CRM · atual</option><option value="https://indycar-agendamentos.onrender.com">Agenda</option><option value="https://indycar-atendimento.onrender.com">Atendimento</option><option value="https://indycar-posvenda.onrender.com">Comunicar</option><option value="https://indycar-orcador.netlify.app">Orçador</option><option value="https://indycar-taubate.netlify.app">Site</option></select></label>
   <div class="side-foot">
     <button class="tema-toggle" id="btnTema" type="button"
             title="Alternar tema claro e escuro" aria-label="Alternar tema claro e escuro">
@@ -95,7 +96,7 @@
 </aside>
 
 <!-- ================= MAIN ================= -->
-<main class="main">
+<main id="conteudo" class="main">
   <header class="topbar">
     <div>
       <h1 id="viewTitle">Dashboard</h1>
@@ -104,13 +105,14 @@
     <div class="topbar-actions">
       <div class="search">
         <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 10-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1114 9.5 4.5 4.5 0 019.5 14z" fill="currentColor"/></svg>
-        <input id="search" type="search" placeholder="Buscar nome, telefone, placa, carro…" />
+        <input aria-label="Buscar leads" id="search" type="search" placeholder="Buscar nome, telefone, placa, carro…" />
       </div>
       <button class="btn btn-primary" id="btnNovo">+ Novo Lead</button>
     </div>
   </header>
 
   <!-- ---------- DASHBOARD ---------- -->
+  <div id="saudeSistema" role="status" hidden></div>
   <section class="view active" id="view-dashboard">
     <div class="kpis" id="kpis"></div>
     <div class="grid-2">
@@ -134,6 +136,8 @@
     <div class="filters">
       <select id="fStatus"><option value="">Todos os status</option></select>
       <select id="fOrigem"><option value="">Todas as origens</option></select>
+      <label>Ordenar <select id="ordemLeads"><option value="recente">Mais recentes</option><option value="nome">Nome A–Z</option><option value="valor">Maior valor</option><option value="antigo">Mais antigos</option></select></label>
+      <button class="btn btn-ghost sm" id="limparFiltros">Limpar filtros</button><button class="btn btn-ghost sm" id="exportarLeads">Exportar CSV</button>
       <span class="filter-count" id="leadCount"></span>
     </div>
     <div class="card"><div class="table-wrap"><table class="table" id="tblLeads"></table></div></div>
@@ -449,17 +453,17 @@
 <!-- ================= MODAL LEAD ================= -->
 <div class="modal-bg" id="modalBg">
   <div class="modal">
-    <button class="modal-x" id="modalX">×</button>
+    <button class="modal-x" id="modalX" aria-label="Fechar lead" type="button">×</button>
     <h3 id="modalTitle">Novo Lead</h3>
     <form id="leadForm">
       <input type="hidden" id="fId" />
       <div class="row">
-        <label>Nome *<input id="fNome" required placeholder="João da Silva" /></label>
-        <label>Telefone *<input id="fTelefone" required placeholder="(12) 9 9999-9999" /></label>
+        <label>Nome *<input id="fNome" maxlength="120" autocomplete="name" required placeholder="João da Silva" /></label>
+        <label>Telefone *<input id="fTelefone" type="tel" inputmode="tel" maxlength="20" required placeholder="(12) 9 9999-9999" /></label>
       </div>
       <div class="row">
         <label>Carro<input id="fCarro" placeholder="Corolla 2018" /></label>
-        <label>Placa<input id="fPlaca" placeholder="ABC1D23" /></label>
+        <label>Placa<input id="fPlaca" maxlength="8" placeholder="ABC1D23" /></label>
       </div>
       <div class="row">
         <label>Serviço<select id="fServico"></select></label>
@@ -473,7 +477,7 @@
         <label>Status<select id="fStatusForm"></select></label>
         <label>Campanha (UTM)<input id="fCampanha" placeholder="ex: trafego-cambio" /></label>
       </div>
-      <label>Observações<textarea id="fObs" rows="2" placeholder="Detalhes do atendimento…"></textarea></label>
+      <label>Observações<textarea id="fObs" maxlength="4000" rows="2" placeholder="Detalhes do atendimento…"></textarea></label>
       <div class="modal-actions">
         <button type="button" class="btn btn-ghost" id="btnExcluir">Excluir</button>
         <div class="spacer"></div>
@@ -492,7 +496,7 @@
   </div>
 </div>
 
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <!-- ================= LOGIN =================
      O CRM guarda dados de clientes e credenciais de Meta/Google.
@@ -542,7 +546,9 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="crm-utils.js"></script>
 <script src="app.js"></script>
+<script src="melhorias.js"></script>
 <script>
   /* Registra o service worker — é o que torna o app instalável.
      Falha silenciosa de propósito: sem ele o app funciona igual, só deixa

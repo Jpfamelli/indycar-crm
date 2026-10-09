@@ -29,7 +29,7 @@ async function authCabecalhos() {
 const api = async (url, opts) => {
   let r;
   try {
-    r = await fetch(url, { ...opts, headers: { ...(await authCabecalhos()), ...(opts?.headers || {}) } });
+    r = await fetch(url, { signal: AbortSignal.timeout(20000), ...opts, headers: { ...(await authCabecalhos()), ...(opts?.headers || {}) } });
   } catch (e) {
     if (/sessão expirou/i.test(e.message)) throw e;
     throw new Error('Sem conexão com o servidor. Verifique se ele está rodando.');
@@ -40,7 +40,7 @@ const api = async (url, opts) => {
   if (!r.ok) throw new Error((corpo && (corpo.erro || corpo.error)) || `Erro ${r.status} do servidor`);
   return corpo;
 };
-const brl = n => (n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+const brl = CrmUtils.moeda;
 const dt  = s => new Date(s).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
 
 const LABEL_STATUS = { novo:'Novo', contato:'Em contato', orcamento:'Orçamento',
@@ -110,10 +110,10 @@ function aplicarTema(tema) {
   /* Desliga as transições durante a troca. Sem isto, o Chrome congela a cor
      antiga de tudo que tem transition e a variável mudou — medido aqui: a
      barra lateral ficava em rgb(13,13,15) com --sidebar já valendo #ffffff. */
-  raiz.classList.add('trocando-tema');
+  raiz.classList.add('trocando-tema'); raiz.setAttribute('data-trocando-tema','');
   raiz.setAttribute('data-tema', claro ? 'claro' : 'escuro');
   void document.body.offsetHeight;              // força o recálculo já, sem transição
-  const soltar = () => raiz.classList.remove('trocando-tema');
+  const soltar = () => { raiz.classList.remove('trocando-tema'); raiz.removeAttribute('data-trocando-tema'); };
   requestAnimationFrame(() => requestAnimationFrame(soltar));
   // rede de segurança: requestAnimationFrame não roda em aba oculta, e sem
   // isso as transições ficariam desligadas até a aba voltar para a frente
@@ -160,7 +160,9 @@ async function carregar() {
   if (navInteg) navInteg.hidden = !SOU_ADMIN;
 
   try {
+    $('#kpis').innerHTML = '<div class="skeleton" aria-label="Carregando indicadores"></div>'.repeat(6);
     STATS = await api('/api/stats');
+    carregarSaude();
     STATUSES = STATS.dominios.STATUSES;
     ORIGENS  = STATS.dominios.ORIGENS;
     preencherSelects();
@@ -180,14 +182,18 @@ async function carregar() {
 }
 
 async function carregarLeads() {
+   const geracao = ++geracaoLeads;
   const p = new URLSearchParams();
   if ($('#fStatus').value) p.set('status', $('#fStatus').value);
   if ($('#fOrigem').value) p.set('origem', $('#fOrigem').value);
   if ($('#search').value.trim()) p.set('q', $('#search').value.trim());
 
   // base completa: o funil e o dashboard nunca podem herdar o filtro da aba Leads
-  TODOS = await api('/api/leads');
-  LEADS = p.toString() ? await api('/api/leads?' + p) : TODOS;
+   const todos = await api('/api/leads');
+   if (geracao !== geracaoLeads) return;
+   TODOS = todos;
+  LEADS = TODOS.filter(l => (!p.get('status') || l.status === p.get('status')) && (!p.get('origem') || l.origem === p.get('origem')) && CrmUtils.buscar(l,p.get('q')));
+   ordenarLeads(); salvarFiltros();
 
   renderTabelaLeads();
   renderKanban();               // sempre sobre TODOS
@@ -195,7 +201,7 @@ async function carregarLeads() {
 }
 
 function preencherSelects() {
-  const opt = (v, l) => `<option value="${v}">${esc(l)}</option>`;
+  const opt = (v, l) => `<option value="${esc(v)}">${esc(l)}</option>`;
 
   // preserva o que o usuário escolheu — antes, salvar um lead zerava o filtro
   const stAtual = $('#fStatus').value, ogAtual = $('#fOrigem').value;
@@ -265,19 +271,19 @@ function renderDashboard() {
 
 /* ---------------- Tabelas ---------------- */
 function linhaLead(l) {
-  return `<tr data-id="${l.id}">
+  return `<tr data-id="${esc(l.id)}" tabindex="0" role="button" aria-label="Editar ${esc(l.nome)}">
     <td><div class="cell-main">${esc(l.nome)}</div><div class="cell-sub">${esc(l.telefone)}</div></td>
     <td><div class="cell-main">${esc(l.carro_modelo) || '—'}</div><div class="cell-sub">${esc(l.placa)}</div></td>
     <td>${esc(l.servico) || '—'}</td>
     <td><span class="tag">${esc(LABEL_ORIGEM[l.origem] ?? l.origem)}</span></td>
     <td class="num">${brl(l.status === 'concluido' ? l.valor_pago : l.valor_orcado)}</td>
-    <td><span class="badge b-${l.status}">${LABEL_STATUS[l.status]}</span></td>
+    <td><span class="badge b-${esc(l.status)}">${esc(LABEL_STATUS[l.status] ?? l.status)}</span></td>
     <td class="cell-sub">${dt(l.created_at)}</td>
   </tr>`;
 }
 function renderTabela(sel, rows) {
   const el = $(sel);
-  if (!rows.length) { el.innerHTML = '<tbody><tr><td style="padding:26px;text-align:center" class="muted">Nenhum lead encontrado.</td></tr></tbody>'; return; }
+  if (!rows.length) { el.innerHTML = '<tbody><tr><td style="padding:26px;text-align:center" class="muted">Nenhum lead encontrado. Limpe os filtros ou use + Novo Lead para começar.</td></tr></tbody>'; return; }
   el.innerHTML = `<thead><tr><th>Cliente</th><th>Carro</th><th>Serviço</th><th>Origem</th><th>Valor</th><th>Status</th><th>Entrada</th></tr></thead>
     <tbody>${rows.map(linhaLead).join('')}</tbody>`;
   // id fica como string: no Supabase é uuid, no SQLite é número — Number() quebraria o uuid
@@ -289,17 +295,30 @@ const renderTabelaLeads = () => renderTabela('#tblLeads', LEADS);
 function renderKanban() {
   $('#kanban').innerHTML = STATUSES.map(st => {
     // o funil mostra o pipeline inteiro — filtro da aba Leads não se aplica aqui
-    const its = TODOS.filter(l => l.status === st);
+    const its = TODOS.filter(l => l.status === st && CrmUtils.buscar(l, $('#search').value));
     return `<div class="kb-col" data-etapa="${esc(st)}">
       <div class="kb-head"><span>${esc(LABEL_STATUS[st] ?? st)}</span><span class="kb-count">${its.length}</span></div>
-      ${its.map(l => `<div class="kb-card" data-id="${l.id}">
+      ${its.map(l => `<div class="kb-card" data-id="${esc(l.id)}" tabindex="0" role="button" aria-label="Editar ${esc(l.nome)}">
         <div class="kb-nome">${esc(l.nome)}</div>
         <div class="kb-meta">${esc(l.carro_modelo) || '—'} · ${esc(l.servico) || 'serviço n/d'}</div>
         <div class="kb-valor">${brl(l.status === 'concluido' ? l.valor_pago : l.valor_orcado)}</div>
+        <select class="kb-etapa" aria-label="Mover ${esc(l.nome)} para outra etapa" data-lead="${esc(l.id)}">
+          ${STATUSES.map(s => `<option value="${esc(s)}" ${s === l.status ? 'selected' : ''}>${esc(LABEL_STATUS[s] ?? s)}</option>`).join('')}
+        </select>
       </div>`).join('') || '<p class="muted" style="font-size:.82rem">Vazio</p>'}
     </div>`;
   }).join('');
   $$('.kb-card').forEach(c => c.addEventListener('click', () => abrirModal(c.dataset.id)));
+  $$('.kb-etapa').forEach(s => {
+    s.addEventListener('click', e => e.stopPropagation());
+    s.addEventListener('keydown', e => e.stopPropagation());
+    s.addEventListener('change', async () => {
+      const l = TODOS.find(l => String(l.id) === s.dataset.lead), antes = l.status;
+      s.disabled = true;
+      try {await api('/api/leads/'+encodeURIComponent(l.id),{method:'PATCH',body:JSON.stringify({status:s.value})});toast('Etapa atualizada');await carregar();}
+      catch(e){s.value=antes;toast(e.message);}finally{s.disabled=false;}
+    });
+  });
 }
 
 /* ---------------- Origem ---------------- */
@@ -367,11 +386,12 @@ async function abrirModal(id) {
   $('#fStatusForm').value = l?.status ?? 'novo';
   $('#fCampanha').value = l?.utm_campaign ?? '';
   $('#fObs').value = l?.observacoes ?? '';
-  modal.classList.add('open');
+  modal.classList.add('open'); ativarDialogo(modal, '#modalTitle');
+   configurarFichaLead(l);
   document.body.style.overflow = 'hidden';
 }
 function fecharModal() {
-  modal.classList.remove('open');
+  modal.classList.remove('open'); restaurarFoco(modal);
   document.body.style.overflow = '';
 }
 $('#btnNovo').addEventListener('click', () => abrirModal(null));
@@ -399,6 +419,7 @@ $('#leadForm').addEventListener('submit', async e => {
   const btnSalvar = $('#leadForm button[type="submit"]');
   btnSalvar.disabled = true;
   try {
+    const falha = CrmUtils.validarLead(payload); if (falha) {toast(falha);return;}
     const editando = editId;
     if (editando) await api(`/api/leads/${editando}`, { method: 'PATCH', body: JSON.stringify(payload) });
     else await api('/api/leads', { method: 'POST', body: JSON.stringify(payload) });
@@ -653,8 +674,8 @@ const LABEL_AGENDAMENTO = {
 };
 /* Data com ano — na ficha do cliente o histórico atravessa meses e
    "12/03" sozinho não diz de qual ano é. */
-const dtAno = s => s ? new Date(s).toLocaleDateString('pt-BR',
-  { day:'2-digit', month:'2-digit', year:'2-digit' }) : '—';
+const dtAno = s => s ? (/^\d{4}-\d{2}-\d{2}$/.test(s) ? `${s.slice(8,10)}/${s.slice(5,7)}/${s.slice(2,4)}` : new Date(s).toLocaleDateString('pt-BR',
+  { day:'2-digit', month:'2-digit', year:'2-digit' })) : '—';
 /* Data pura do banco ("2026-07-16") — new Date() nela assume UTC e o
    fuso do Brasil jogaria o dia para trás. Por isso montamos na mão. */
 const dtSimples = s => {
@@ -731,7 +752,7 @@ $('#buscaCliente').addEventListener('input', () => {
 
 function fecharFichaCliente() {
   if (!modalCli.classList.contains('open')) return;
-  modalCli.classList.remove('open');
+  modalCli.classList.remove('open'); restaurarFoco(modalCli);
   document.body.style.overflow = '';
 }
 $('#modalCliX').addEventListener('click', fecharFichaCliente);
@@ -739,8 +760,8 @@ modalCli.addEventListener('click', e => { if (e.target === modalCli) fecharFicha
 
 async function abrirFichaCliente(id) {
   const alvo = $('#fichaCliente');
-  alvo.innerHTML = '<p class="muted"><span class="spinner"></span>Montando a ficha…</p>';
-  modalCli.classList.add('open');
+  alvo.innerHTML = '<div class="skeleton" aria-label="Carregando ficha"></div>';
+  modalCli.classList.add('open'); ativarDialogo(modalCli);
   document.body.style.overflow = 'hidden';
 
   try {
@@ -806,7 +827,11 @@ async function abrirFichaCliente(id) {
 
       <p class="muted" style="font-size:.78rem;margin-top:18px">
         "Já gastou" soma os leads concluídos mais os agendamentos concluídos que não vieram de
-        um lead — assim o mesmo serviço não entra na conta duas vezes.</p>`;
+        um lead — assim o mesmo serviço não entra na conta duas vezes.</p>
+      <p>Faltas: ${esc(r.faltas ?? 0)} · Último serviço: ${esc(dtAno(r.ultimoServico))}</p>
+      <div id="preferenciasCliente"></div>
+      <a href="https://indycar-agendamentos.onrender.com" target="_blank" rel="noopener noreferrer">Abrir Agenda</a>`;
+    montarPreferencias(c);
   } catch (err) {
     alvo.innerHTML = `<div class="alert">Não consegui abrir a ficha: ${esc(err.message)}</div>`;
   }

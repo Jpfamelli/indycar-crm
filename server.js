@@ -5,6 +5,9 @@
 'use strict';
 
 const http = require('node:http');
+const utils = require('./public/crm-utils');
+let statsCache = null;
+const statsEmCache = async () => { if (!statsCache || statsCache.expira < Date.now()) statsCache = { valor: await store.getStats(), expira: Date.now() + 60000 }; return statsCache.valor; };
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -45,20 +48,22 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=u
 const json = (res, code, data) => {
   const body = JSON.stringify(data);
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8',
-                        'Content-Length': Buffer.byteLength(body) });
+                        'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Length': Buffer.byteLength(body) });
   res.end(body);
 };
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
-    let raw = '';
+    let raw = '', bytes = 0, excedeu = false;
     req.on('data', c => {
+      bytes += c.length;
+      if (bytes > 65536) { excedeu = true; return; }
       raw += c;
-      if (raw.length > 1e6) { reject(new Error('payload muito grande')); req.destroy(); }
     });
     req.on('end', () => {
+      if (excedeu) return reject(Object.assign(new Error('Corpo maior que 64 KB.'), { status: 413 }));
       if (!raw) return resolve({});
-      try { resolve(JSON.parse(raw)); } catch { reject(new Error('JSON inválido')); }
+      try { resolve(JSON.parse(raw)); } catch { reject(Object.assign(new Error('JSON inválido'), {status:400})); }
     });
     req.on('error', reject);
   });
@@ -67,11 +72,11 @@ function readBody(req) {
 function serveStatic(res, urlPath) {
   const rel = urlPath === '/' ? 'index.html' : urlPath.slice(1);
   // impede path traversal
-  const file = path.join(PUBLIC, rel);
-  if (!file.startsWith(PUBLIC)) { res.writeHead(403).end('Proibido'); return; }
+  const file = path.resolve(PUBLIC, rel);
+  if (!file.startsWith(PUBLIC + path.sep)) { res.writeHead(403).end('Proibido'); return; }
   fs.readFile(file, (err, buf) => {
     if (err) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('Não encontrado'); return; }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
+    res.writeHead(200, { 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-cache', 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
     res.end(buf);
   });
 }
@@ -205,7 +210,7 @@ async function carregarBaseClientes() {
 
   const [rc, rl, ra] = await Promise.all([
     sb.from('clientes')
-      .select('id,nome,telefone,email,carro_modelo,carro_ano,placa,origem,observacoes,created_at')
+      .select('id,nome,telefone,email,carro_modelo,carro_ano,placa,origem,observacoes,created_at,nascimento,aceita_mensagens,aceita_mensagens_em')
       .order('nome'),
     sb.from('leads')
       .select('id,cliente_id,nome,telefone,servico,valor_orcado,valor_pago,status,origem,utm_campaign,observacoes,created_at,closed_at')
@@ -377,6 +382,14 @@ const server = http.createServer(async (req, res) => {
         return json(res, 401, { erro: 'Faça login para usar o CRM.' });
       }
       const ehAdmin = quem.papel === 'admin';
+      if (pathname === '/api/saude' && req.method === 'GET') {
+        const sb = adminSupabase();
+        if (!sb) return json(res, 503, {erro:'Saúde indisponível.'});
+        const {data,error} = await sb.from('vigia_estado').select('problema,desde,ultimo_resumo');
+        if (error) return json(res,503,{erro:'Não foi possível consultar a saúde.'});
+        return json(res,200,{avisos:(data || []).filter(x => x.problema).map(x => ({problema:texto1(x.problema,240),desde:x.desde}))});
+      }
+      if (req.method !== 'GET') statsCache = null;
 
       // GET /api/leads?status=&origem=&q=
       if (pathname === '/api/leads' && req.method === 'GET') {
@@ -390,7 +403,7 @@ const server = http.createServer(async (req, res) => {
       // POST /api/leads
       if (pathname === '/api/leads' && req.method === 'POST') {
         const body = await readBody(req);
-        if (!body.nome || !body.telefone) return json(res, 400, { erro: 'nome e telefone são obrigatórios' });
+        const falha = utils.validarLead(body); if (falha) return json(res,400,{erro:falha});
         return json(res, 201, await store.createLead(body));
       }
 
@@ -404,7 +417,8 @@ const server = http.createServer(async (req, res) => {
           return lead ? json(res, 200, lead) : json(res, 404, { erro: 'lead não encontrado' });
         }
         if (req.method === 'PATCH') {
-          const updated = await store.updateLead(id, await readBody(req));
+          const body = await readBody(req); const falha = utils.validarLead(body,true); if (falha) return json(res,400,{erro:falha});
+          const updated = await store.updateLead(id, body);
           return updated ? json(res, 200, updated) : json(res, 404, { erro: 'lead não encontrado' });
         }
         if (req.method === 'DELETE') {
@@ -415,7 +429,7 @@ const server = http.createServer(async (req, res) => {
 
       // GET /api/stats
       if (pathname === '/api/stats' && req.method === 'GET') {
-        return json(res, 200, await store.getStats());
+        return json(res, 200, await statsEmCache());
       }
 
       // POST /api/resumo-ia  → resumo semanal gerado pela Claude
@@ -692,6 +706,12 @@ const server = http.createServer(async (req, res) => {
 
       // GET /api/clientes/:id → ficha 360 de um cliente
       const mc = pathname.match(/^\/api\/clientes\/([0-9a-fA-F-]{36})$/);
+      if (mc && req.method === 'PATCH') {
+        if (!ehUuid(mc[1])) return json(res,400,{erro:'Cliente inválido.'});
+        if (!store.atualizarPreferenciasCliente) return json(res,503,{erro:'Disponível no banco compartilhado.'});
+        const cliente = await store.atualizarPreferenciasCliente(mc[1], await readBody(req));
+        return cliente ? json(res,200,{cliente}) : json(res,404,{erro:'Cliente não encontrado.'});
+      }
       if (mc && req.method === 'GET') {
         if (!ehUuid(mc[1])) return json(res, 400, { erro: 'cliente inválido' });
         try {
@@ -709,6 +729,8 @@ const server = http.createServer(async (req, res) => {
               leads: f.leads.length,
               ganhos: concluidos,
               agendamentos: f.agendamentos.length,
+              faltas: f.agendamentos.filter(a => a.status === 'nao_veio').length,
+              ultimoServico: [...f.agendamentos.filter(a => a.status === 'concluido').map(a => a.data), ...f.leads.filter(l => l.status === 'concluido').map(l => l.closed_at)].filter(Boolean).sort().at(-1) || null,
               ticket: concluidos ? Math.round((f.gasto / concluidos) * 100) / 100 : 0,
             },
             servicos: [...f.servicos.entries()]
@@ -760,7 +782,8 @@ const server = http.createServer(async (req, res) => {
     serveStatic(res, pathname);
 
   } catch (err) {
-    json(res, 500, { erro: err.message || 'erro interno' });
+    console.error('Falha na requisição:', err.name);
+    json(res, err.status || 500, { erro: err.status ? err.message : 'Não foi possível concluir. Tente novamente.' });
   }
 });
 

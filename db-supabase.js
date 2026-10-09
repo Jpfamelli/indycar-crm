@@ -40,7 +40,7 @@ function erro(ctx, e) {
 
 /* O Postgres devolve `numeric` como string ("890.00"). O front faz conta
    com esses valores, então convertemos na fronteira. */
-const nDec = v => (v === null || v === undefined ? 0 : Number(v));
+const nDec = v => Number.isFinite(Number(v)) ? Number(v) : 0;
 
 function normalizarLead(l) {
   if (!l) return l;
@@ -425,4 +425,22 @@ module.exports = {
   getIntegracoes, salvarIntegracao, limparIntegracao,
   salvarMetrica, getROI,
   _sb: sb,
+};
+
+// Preferências ficam no cliente compartilhado, nunca no lead.
+module.exports.atualizarPreferenciasCliente = async function(id, dados) {
+  const utils = require('./public/crm-utils');
+  if (!dados || typeof dados !== 'object' || Array.isArray(dados)) throw Object.assign(new Error('Objeto JSON obrigatório.'),{status:400});
+  const patch = {};
+  if ('nascimento' in dados) { try {patch.nascimento = utils.nascimento(dados.nascimento);} catch(e) {e.status=400;throw e;} }
+  if ('aceita_mensagens' in dados) {
+    if (typeof dados.aceita_mensagens !== 'boolean') throw Object.assign(new Error('Informe a preferência de mensagens.'),{status:400});
+    const {data: atual,error:e} = await sb.from('clientes').select('aceita_mensagens').eq('id',id).maybeSingle(); erro('preferencias',e);
+    if (!atual) return null;
+    patch.aceita_mensagens = dados.aceita_mensagens;
+    if (atual.aceita_mensagens !== dados.aceita_mensagens) patch.aceita_mensagens_em = new Date().toISOString();
+  }
+  if (!Object.keys(patch).length) throw Object.assign(new Error('Nenhuma preferência informada.'),{status:400});
+  const {data,error} = await sb.from('clientes').update(patch).eq('id',id).select('id,nascimento,aceita_mensagens,aceita_mensagens_em').maybeSingle();
+  erro('atualizarPreferenciasCliente',error); return data;
 };

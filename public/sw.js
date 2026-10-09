@@ -1,11 +1,11 @@
 // Service Worker do IndyCar CRM — é o que torna o app instalável
 // e faz a casca abrir rápido mesmo com internet ruim na oficina.
-const CACHE = 'indycar-crm-v2';
+const CACHE = 'indycar-crm-v3';
 
 /* Se QUALQUER item desta lista faltar, o addAll rejeita e o service worker
    NÃO instala — o app deixa de ser instalável sem dizer por quê. Mantenha
    aqui só o que existe de verdade. */
-const CORE = ['/', '/styles.css', '/app.js', '/manifest.json',
+const CORE = ['/', '/styles.css', '/app.js', '/crm-utils.js', '/melhorias.js', '/manifest.json',
               '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -24,12 +24,12 @@ self.addEventListener('fetch', (e) => {
 
   /* NUNCA servir /api/ do cache. Lead e valor mudam o tempo todo;
      número velho em tela de CRM leva a decisão errada. */
-  if (e.request.method !== 'GET' || url.pathname.startsWith('/api/')) return;
+  if (e.request.method !== 'GET' || url.pathname.startsWith('/api/') || url.origin !== self.location.origin) return;
 
   // estático: rede primeiro (pega a versão nova), cache só quando cai
   e.respondWith(
     fetch(e.request)
-      .then((r) => { const cp = r.clone(); caches.open(CACHE).then((c) => c.put(e.request, cp)); return r; })
-      .catch(() => caches.match(e.request).then((m) => m || caches.match('/')))
+      .then((r) => { if (r.ok) { const cp = r.clone(); caches.open(CACHE).then((c) => c.put(e.request, cp)); } return r; })
+      .catch(() => caches.match(e.request).then((m) => m || (e.request.mode === 'navigate' ? caches.match('/') : Response.error())))
   );
 });

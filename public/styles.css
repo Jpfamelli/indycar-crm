@@ -687,3 +687,32 @@ option{background:var(--pop-solid);color:var(--texto)}
 }
 /* Enquanto não entrar, o app fica escondido atrás da capa */
 body.deslogado .sidebar,body.deslogado main{visibility:hidden}
+
+/* Rodada 09/10: saúde, foco, telas estreitas e carregamento. */
+body{transition:none}
+html[data-trocando-tema] *,html[data-trocando-tema] *::before,html[data-trocando-tema] *::after{transition:none!important}
+.ecossistema{display:block;font-size:.8rem;padding:12px;color:var(--gray)}
+.ecossistema select{display:block;width:100%;margin-top:8px;background:var(--superficie);color:var(--texto);border:1px solid var(--line);padding:10px;border-radius:8px}
+#saudeSistema{padding:12px;border:1px solid #b9770e;border-radius:10px;margin-bottom:16px;background:var(--superficie);font-size:.9rem}
+.skeleton{height:115px;border-radius:12px;background:var(--superficie-2);animation:pulsar 1.3s ease-in-out infinite alternate}
+.kb-etapa{width:100%;margin-top:10px;padding:8px;border-radius:6px;background:var(--superficie);color:var(--texto);border:1px solid var(--line)}
+@keyframes pulsar{to{opacity:.45}}
+:focus-visible{outline:2px solid var(--red);outline-offset:3px}
+.modal-bg:not(.open){visibility:hidden}
+.modal-bg.open{visibility:visible}
+#preferenciasCliente{margin:18px 0}
+#preferenciasCliente input[type=checkbox]{width:auto}
+@media(max-width:480px){
+  .sidebar{flex-wrap:wrap}.ecossistema{order:5;width:100%;padding:0}.ecossistema select{margin:4px 0 0}
+  main,.view,.card,.topbar,.header-actions{min-width:0;max-width:100%}
+  .filters{flex-wrap:wrap}.filters>*{max-width:100%}
+  .search input{width:100%;min-width:0}.search{min-width:0;max-width:100%}
+  .table-wrap{max-width:100%;overflow-x:auto}
+  .modal-bg{padding:10px}.modal{max-width:100%;max-height:94dvh;overflow-y:auto}
+  .modal-x{position:sticky;float:right;top:0;right:0;z-index:2}
+  .form-row{grid-template-columns:1fr}
+  .ficha-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .ficha-sub,.cell-main{overflow-wrap:anywhere}
+  .kanban{max-width:100%;overflow-x:auto}
+}
+@media(prefers-reduced-motion:reduce){.skeleton{animation:none}*{scroll-behavior:auto!important}}
