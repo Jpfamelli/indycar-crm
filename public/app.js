@@ -71,7 +71,7 @@ const TITULOS = {
   origem:        ['Origem dos Leads', 'De onde vem cada cliente — e quanto rende'],
   servicos:      ['Serviços', 'O catálogo que a IA usa para responder o cliente'],
   integracoes:   ['Integrações', 'Meta Ads, Google Ads e o ROI de cada canal'],
-  ia:            ['Resumo com IA', 'Análise inteligente da semana'],
+  ia:            ['IA', 'Pergunte ao CRM, triagem e o resumo da semana'],
   configuracoes: ['Configurações', 'Sua conta, sua senha e a equipe'],
 };
 // a busca do topo só filtra estas abas — nas outras ela ficava visível e inerte
@@ -82,7 +82,7 @@ const ABAS_SEM_NOVO = new Set(['servicos', 'configuracoes']);
 
 function irPara(v) {
   if (!TITULOS[v]) return;
-  $$('.nav-item').forEach(x => x.classList.toggle('active', x.dataset.view === v));
+  $$('.nav-item').forEach(x => { x.classList.toggle('active', x.dataset.view === v); if (x.dataset.view === v) x.setAttribute('aria-current', 'page'); else x.removeAttribute('aria-current'); });
   $$('.view').forEach(x => x.classList.remove('active'));
   $(`#view-${v}`)?.classList.add('active');
   $('#viewTitle').textContent = TITULOS[v][0];
@@ -93,6 +93,7 @@ function irPara(v) {
   if (v === 'clientes')      carregarClientes();
   if (v === 'servicos')      carregarCatalogo();
   if (v === 'configuracoes') carregarConfiguracoes();
+  try { sessionStorage.setItem('indycar_crm_aba', v); } catch { /* ignora */ }
 }
 $$('.nav-item').forEach(b => b.addEventListener('click', () => irPara(b.dataset.view)));
 
@@ -137,12 +138,13 @@ aplicarTema(temaAtual());
 
 /* ---------------- Toast ---------------- */
 let toastT;
-function toast(msg) {
+function toast(msg, ms = 3200) {
   const t = $('#toast');
-  t.textContent = msg;
+  $('#toastTxt').textContent = msg;
+  $('#toastAcao').hidden = true;
   t.classList.add('show');
   clearTimeout(toastT);
-  toastT = setTimeout(() => t.classList.remove('show'), 3200);
+  toastT = setTimeout(() => t.classList.remove('show'), ms);
 }
 
 /* ---------------- Carregar dados ---------------- */
@@ -160,16 +162,26 @@ async function carregar() {
   if (navInteg) navInteg.hidden = !SOU_ADMIN;
 
   try {
-    $('#kpis').innerHTML = '<div class="skeleton" aria-label="Carregando indicadores"></div>'.repeat(6);
+    const primeira = !STATS;
+    if (primeira) {
+      $('#kpis').innerHTML = '<div class="skeleton" aria-label="Carregando indicadores"></div>'.repeat(6);
+      $('#kanban').innerHTML = '<div class="kb-col"><div class="skeleton alto" aria-label="Carregando funil"></div></div>'.repeat(4);
+      $('#tblLeads').innerHTML = '<tbody><tr><td><div class="skeleton" aria-label="Carregando leads"></div></td></tr></tbody>';
+    }
     STATS = await api('/api/stats');
     carregarSaude();
     STATUSES = STATS.dominios.STATUSES;
     ORIGENS  = STATS.dominios.ORIGENS;
     preencherSelects();
     await carregarLeads();
-    renderDashboard();
+    renderPainel();
     renderOrigem();
     renderHowto();
+    if (primeira) {
+      let aba = null; try { aba = sessionStorage.getItem('indycar_crm_aba'); } catch { /* ignora */ }
+      if (aba && aba !== 'dashboard' && !$(`.nav-item[data-view="${aba}"]`)?.hidden) irPara(aba);
+      abrirPorLink();
+    }
   } catch (err) {
     // antes, uma falha aqui deixava a tela em branco sem explicação
     toast('⚠️ ' + err.message);
@@ -182,19 +194,12 @@ async function carregar() {
 }
 
 async function carregarLeads() {
-   const geracao = ++geracaoLeads;
-  const p = new URLSearchParams();
-  if ($('#fStatus').value) p.set('status', $('#fStatus').value);
-  if ($('#fOrigem').value) p.set('origem', $('#fOrigem').value);
-  if ($('#search').value.trim()) p.set('q', $('#search').value.trim());
-
+  const geracao = ++geracaoLeads;
   // base completa: o funil e o dashboard nunca podem herdar o filtro da aba Leads
-   const todos = await api('/api/leads');
-   if (geracao !== geracaoLeads) return;
-   TODOS = todos;
-  LEADS = TODOS.filter(l => (!p.get('status') || l.status === p.get('status')) && (!p.get('origem') || l.origem === p.get('origem')) && CrmUtils.buscar(l,p.get('q')));
-   ordenarLeads(); salvarFiltros();
-
+  const todos = await api('/api/leads');
+  if (geracao !== geracaoLeads) return;
+  TODOS = Array.isArray(todos) ? todos : [];
+  refiltrar(); salvarFiltros();
   renderTabelaLeads();
   renderKanban();               // sempre sobre TODOS
   $('#leadCount').textContent = `${LEADS.length} registro${LEADS.length === 1 ? '' : 's'}`;
@@ -217,109 +222,11 @@ function preencherSelects() {
   $('#fStatusForm').innerHTML = STATUSES.map(s => opt(s, LABEL_STATUS[s] ?? s)).join('');
   $('#fOrigemForm').innerHTML = ORIGENS.map(o => opt(o, LABEL_ORIGEM[o] ?? o)).join('');
   $('#fServico').innerHTML = '<option value="">—</option>' + SERVICOS.map(s => opt(s, s)).join('');
+  $('#loteStatus').innerHTML = '<option value="">Mudar etapa…</option>' + STATUSES.map(s => opt(s, LABEL_STATUS[s] ?? s)).join('');
+  $('#loteOrigem').innerHTML = '<option value="">Atribuir origem…</option>' + ORIGENS.map(o => opt(o, LABEL_ORIGEM[o] ?? o)).join('');
 }
 
-/* ---------------- Dashboard ---------------- */
-function delta(atual, anterior) {
-  if (!anterior) return atual ? `<span class="up">▲ novo</span>` : `<span class="flat">—</span>`;
-  const p = ((atual - anterior) / anterior) * 100;
-  const cls = p > 0 ? 'up' : p < 0 ? 'down' : 'flat';
-  const seta = p > 0 ? '▲' : p < 0 ? '▼' : '—';
-  return `<span class="${cls}">${seta} ${Math.abs(p).toFixed(0)}% vs. semana anterior</span>`;
-}
-
-function renderDashboard() {
-  const s = STATS.semana, c = STATS.comparativo, g = STATS.geral;
-  $('#kpis').innerHTML = `
-    <div class="kpi"><div class="kpi-label">Leads na semana</div>
-      <div class="kpi-value">${s.total}</div><div class="kpi-delta">${delta(c.leads.atual, c.leads.anterior)}</div></div>
-    <div class="kpi"><div class="kpi-label">Faturamento (7d)</div>
-      <div class="kpi-value">${brl(s.faturamento)}</div><div class="kpi-delta">${delta(c.faturamento.atual, c.faturamento.anterior)}</div></div>
-    <div class="kpi"><div class="kpi-label">Taxa de conversão</div>
-      <div class="kpi-value">${s.conversao.toFixed(0)}%</div><div class="kpi-delta"><span class="flat">${s.ganhos} fechados · ${s.perdidos} perdidos</span></div></div>
-    <div class="kpi"><div class="kpi-label">Ticket médio</div>
-      <div class="kpi-value">${brl(s.ticket)}</div><div class="kpi-delta"><span class="flat">por serviço concluído</span></div></div>
-    <div class="kpi"><div class="kpi-label">Em aberto</div>
-      <div class="kpi-value">${brl(s.emAberto)}</div><div class="kpi-delta"><span class="flat">orçamentos aguardando</span></div></div>
-    <div class="kpi"><div class="kpi-label">Base total</div>
-      <div class="kpi-value">${g.total}</div><div class="kpi-delta"><span class="flat">${brl(g.faturamento)} acumulado</span></div></div>`;
-
-  // spotlight nos KPIs
-  $$('.kpi').forEach(k => k.addEventListener('pointermove', e => {
-    const r = k.getBoundingClientRect();
-    k.style.setProperty('--mx', `${e.clientX - r.left}px`);
-    k.style.setProperty('--my', `${e.clientY - r.top}px`);
-  }));
-
-  // funil
-  const max = Math.max(...Object.values(g.porStatus), 1);
-  $('#funnelMini').innerHTML = STATUSES.map(st => `
-    <div class="fm-row" data-etapa="${st}"><span class="fm-name">${LABEL_STATUS[st]}</span>
-      <div class="fm-bar"><div class="fm-fill" style="width:${(g.porStatus[st] / max) * 100}%"></div></div>
-      <span class="fm-num">${g.porStatus[st]}</span></div>`).join('');
-
-  // origem (7d)
-  $('#originMini').innerHTML = s.porOrigem.length ? s.porOrigem.map(o => `
-    <div class="origin-row">
-      <span class="origin-name"><span class="dot" style="background:${COR_ORIGEM[o.origem]}"></span>${LABEL_ORIGEM[o.origem]}</span>
-      <span class="origin-stats"><span><b>${o.leads}</b>leads</span><span><b>${o.ganhos}</b>fechou</span><span><b>${brl(o.faturamento)}</b>faturou</span></span>
-    </div>`).join('') : '<p class="muted">Nenhum lead nos últimos 7 dias.</p>';
-
-  // últimos leads — sempre a base completa, nunca o recorte filtrado da aba Leads
-  renderTabela('#tblRecent', TODOS.slice(0, 8));
-}
-
-/* ---------------- Tabelas ---------------- */
-function linhaLead(l) {
-  return `<tr data-id="${esc(l.id)}" tabindex="0" role="button" aria-label="Editar ${esc(l.nome)}">
-    <td><div class="cell-main">${esc(l.nome)}</div><div class="cell-sub">${esc(l.telefone)}</div></td>
-    <td><div class="cell-main">${esc(l.carro_modelo) || '—'}</div><div class="cell-sub">${esc(l.placa)}</div></td>
-    <td>${esc(l.servico) || '—'}</td>
-    <td><span class="tag">${esc(LABEL_ORIGEM[l.origem] ?? l.origem)}</span></td>
-    <td class="num">${brl(l.status === 'concluido' ? l.valor_pago : l.valor_orcado)}</td>
-    <td><span class="badge b-${esc(l.status)}">${esc(LABEL_STATUS[l.status] ?? l.status)}</span></td>
-    <td class="cell-sub">${dt(l.created_at)}</td>
-  </tr>`;
-}
-function renderTabela(sel, rows) {
-  const el = $(sel);
-  if (!rows.length) { el.innerHTML = '<tbody><tr><td style="padding:26px;text-align:center" class="muted">Nenhum lead encontrado. Limpe os filtros ou use + Novo Lead para começar.</td></tr></tbody>'; return; }
-  el.innerHTML = `<thead><tr><th>Cliente</th><th>Carro</th><th>Serviço</th><th>Origem</th><th>Valor</th><th>Status</th><th>Entrada</th></tr></thead>
-    <tbody>${rows.map(linhaLead).join('')}</tbody>`;
-  // id fica como string: no Supabase é uuid, no SQLite é número — Number() quebraria o uuid
-  $$('tbody tr', el).forEach(tr => tr.addEventListener('click', () => abrirModal(tr.dataset.id)));
-}
-const renderTabelaLeads = () => renderTabela('#tblLeads', LEADS);
-
-/* ---------------- Kanban ---------------- */
-function renderKanban() {
-  $('#kanban').innerHTML = STATUSES.map(st => {
-    // o funil mostra o pipeline inteiro — filtro da aba Leads não se aplica aqui
-    const its = TODOS.filter(l => l.status === st && CrmUtils.buscar(l, $('#search').value));
-    return `<div class="kb-col" data-etapa="${esc(st)}">
-      <div class="kb-head"><span>${esc(LABEL_STATUS[st] ?? st)}</span><span class="kb-count">${its.length}</span></div>
-      ${its.map(l => `<div class="kb-card" data-id="${esc(l.id)}" tabindex="0" role="button" aria-label="Editar ${esc(l.nome)}">
-        <div class="kb-nome">${esc(l.nome)}</div>
-        <div class="kb-meta">${esc(l.carro_modelo) || '—'} · ${esc(l.servico) || 'serviço n/d'}</div>
-        <div class="kb-valor">${brl(l.status === 'concluido' ? l.valor_pago : l.valor_orcado)}</div>
-        <select class="kb-etapa" aria-label="Mover ${esc(l.nome)} para outra etapa" data-lead="${esc(l.id)}">
-          ${STATUSES.map(s => `<option value="${esc(s)}" ${s === l.status ? 'selected' : ''}>${esc(LABEL_STATUS[s] ?? s)}</option>`).join('')}
-        </select>
-      </div>`).join('') || '<p class="muted" style="font-size:.82rem">Vazio</p>'}
-    </div>`;
-  }).join('');
-  $$('.kb-card').forEach(c => c.addEventListener('click', () => abrirModal(c.dataset.id)));
-  $$('.kb-etapa').forEach(s => {
-    s.addEventListener('click', e => e.stopPropagation());
-    s.addEventListener('keydown', e => e.stopPropagation());
-    s.addEventListener('change', async () => {
-      const l = TODOS.find(l => String(l.id) === s.dataset.lead), antes = l.status;
-      s.disabled = true;
-      try {await api('/api/leads/'+encodeURIComponent(l.id),{method:'PATCH',body:JSON.stringify({status:s.value})});toast('Etapa atualizada');await carregar();}
-      catch(e){s.value=antes;toast(e.message);}finally{s.disabled=false;}
-    });
-  });
-}
+/* Dashboard, tabelas e funil: renderPainel, renderTabela e renderKanban em melhorias.js */
 
 /* ---------------- Origem ---------------- */
 function renderOrigem() {
@@ -357,75 +264,88 @@ function renderHowto() {
 const modal = $('#modalBg');
 let editId = null;
 
-async function abrirModal(id) {
+async function abrirModal(id, pre = {}) {
   // Resolve o lead ANTES de mexer no estado. Antes, um id que não estivesse no
   // recorte filtrado abria o modal em branco com editId setado — e salvar
   // sobrescrevia o cliente com campos vazios.
+  if (modal.classList.contains('open') && !fecharModal()) return;
   let l = null;
   if (id) {
     // compara como texto: uuid (Supabase) e número (SQLite) convivem
     const mesmo = x => String(x.id) === String(id);
     l = TODOS.find(mesmo) || LEADS.find(mesmo) || null;
     if (!l) {
-      try { const r = await api('/api/leads/' + id); l = r && r.id ? r : null; } catch { l = null; }
+      try { const r = await api('/api/leads/' + encodeURIComponent(id)); l = r && r.id ? r : null; } catch { l = null; }
     }
     if (!l) { toast('Lead não encontrado — atualize a página.'); return; }
   }
   editId = l ? l.id : null;
-  $('#modalTitle').textContent = l ? 'Editar Lead' : 'Novo Lead';
+  LEAD_ABERTO = l ? l.id : null;
+  $('#modalTitle').textContent = l ? 'Lead' : 'Novo lead';
+  $('#modalTitle').classList.toggle('sr', !!l);
   $('#btnExcluir').style.display = l ? 'inline-flex' : 'none';
-  $('#fId').value = l?.id ?? '';
-  $('#fNome').value = l?.nome ?? '';
-  $('#fTelefone').value = l?.telefone ?? '';
-  $('#fCarro').value = l?.carro_modelo ?? '';
-  $('#fPlaca').value = l?.placa ?? '';
-  $('#fServico').value = l?.servico ?? '';
-  $('#fOrigemForm').value = l?.origem ?? 'organico';
-  $('#fOrcado').value = l?.valor_orcado ?? '';
-  $('#fPago').value = l?.valor_pago ?? '';
-  $('#fStatusForm').value = l?.status ?? 'novo';
-  $('#fCampanha').value = l?.utm_campaign ?? '';
-  $('#fObs').value = l?.observacoes ?? '';
-  modal.classList.add('open'); ativarDialogo(modal, '#modalTitle');
-   configurarFichaLead(l);
+  $('#leadFicha').hidden = !l;
+  $('#painelDados').setAttribute('role', l ? 'tabpanel' : 'region');
+  preencherForm(l, pre);
+  if (l) { renderFichaLead(l); mostrarAba('abaTl'); renderTarefas(); carregarLinhaTempo(l); }
+  else $('#painelDados').hidden = false;
+  modal.classList.add('open'); ativarDialogo(modal, l ? null : '#modalTitle');
+  if (l) modal.firstElementChild.setAttribute('aria-label', 'Lead ' + l.nome); else modal.firstElementChild.removeAttribute('aria-label');
+  if (!l) $('#fNome').focus();
   document.body.style.overflow = 'hidden';
+  emitirLead(l);
 }
-function fecharModal() {
+/* Fecha a gaveta. Com alterações não salvas, pergunta antes (forcar ignora). */
+function fecharModal(forcar) {
+  if (!modal.classList.contains('open')) return true;
+  if (forcar !== true && formSujo() && !confirm('Descartar as alterações que não foram salvas?')) return false;
   modal.classList.remove('open'); restaurarFoco(modal);
   document.body.style.overflow = '';
+  const tinha = LEAD_ABERTO; editId = null; LEAD_ABERTO = null; LT_GERACAO++;
+  if (tinha) emitirLead(null);
+  return true;
 }
 $('#btnNovo').addEventListener('click', () => abrirModal(null));
 $('#modalX').addEventListener('click', fecharModal);
 $('#btnCancelar').addEventListener('click', fecharModal);
 modal.addEventListener('click', e => { if (e.target === modal) fecharModal(); });
 document.addEventListener('keydown', e => {
-  if (e.key !== 'Escape') return;
-  fecharModal();
-  fecharFichaCliente();
+  if (e.key !== 'Escape' || $('dialog[open]')) return;
+  if (!$('#painelColunas').hidden) { $('#painelColunas').hidden = true; $('#btnColunas').setAttribute('aria-expanded', 'false'); $('#btnColunas').focus(); return; }
+  if (modalCli.classList.contains('open')) fecharFichaCliente(); else fecharModal();
 });
 
 $('#leadForm').addEventListener('submit', async e => {
   e.preventDefault();
+  if (!validarForm()) return;
   const payload = {
-    nome: $('#fNome').value.trim(), telefone: $('#fTelefone').value.trim(),
-    carro_modelo: $('#fCarro').value.trim(), placa: $('#fPlaca').value.trim().toUpperCase(),
+    nome: $('#fNome').value.trim(), telefone: U.telE164($('#fTelefone').value) || $('#fTelefone').value.trim(),
+    carro_modelo: $('#fCarro').value.trim(), placa: $('#fPlaca').value.trim().toUpperCase().replace(/[^A-Z0-9]/g, ''),
     servico: $('#fServico').value, origem: $('#fOrigemForm').value,
     valor_orcado: $('#fOrcado').value || 0, valor_pago: $('#fPago').value || 0,
     status: $('#fStatusForm').value, utm_campaign: $('#fCampanha').value.trim(),
     observacoes: $('#fObs').value.trim(),
   };
-  if (!payload.nome || !payload.telefone) { toast('⚠️ Preencha nome e telefone.'); return; }
-
   const btnSalvar = $('#leadForm button[type="submit"]');
   btnSalvar.disabled = true;
   try {
-    const falha = CrmUtils.validarLead(payload); if (falha) {toast(falha);return;}
-    const editando = editId;
-    if (editando) await api(`/api/leads/${editando}`, { method: 'PATCH', body: JSON.stringify(payload) });
-    else await api('/api/leads', { method: 'POST', body: JSON.stringify(payload) });
-    fecharModal();
-    toast(editando ? '✅ Lead atualizado' : '✅ Lead cadastrado');
-    await carregar();
+    const editando = editId, antes = editando ? TODOS.find(x => String(x.id) === String(editando)) : null;
+    if (payload.status === 'perdido' && antes?.status !== 'perdido' && !U.motivoPerda(payload.observacoes)) {
+      const m = await perguntarPerda(payload.nome); if (!m) return;
+      payload.observacoes = U.comMotivoPerda(payload.observacoes, m);
+    }
+    if (payload.status === 'concluido' && antes?.status !== 'concluido' && !(Number(payload.valor_pago) > 0)) {
+      const v = await perguntarPago({...payload, valor_pago: 0}); if (v === null) return;
+      payload.valor_pago = v;
+    }
+    const falha = CrmUtils.validarLead(payload); if (falha) { toast('⚠️ ' + falha); return; }
+    const salvo = editando ? await api(`/api/leads/${encodeURIComponent(editando)}`, { method: 'PATCH', body: JSON.stringify(payload) })
+                           : await api('/api/leads', { method: 'POST', body: JSON.stringify(payload) });
+    fecharModal(true);
+    substituirLocal(salvo); redesenhar();
+    if (editando) toast('✅ Lead atualizado');
+    else toastAcao('✅ Lead cadastrado', 'Abrir', () => abrirModal(salvo.id));
+    carregar().catch(() => {});   // números do servidor (estatísticas) em segundo plano
   } catch (err) {
     toast('⚠️ ' + err.message);   // erro do servidor não pode mais virar "sucesso"
   } finally {
@@ -434,10 +354,11 @@ $('#leadForm').addEventListener('submit', async e => {
 });
 
 $('#btnExcluir').addEventListener('click', async () => {
-  if (!editId || !confirm('Excluir este lead? Essa ação não pode ser desfeita.')) return;
+  const l = TODOS.find(x => String(x.id) === String(editId));
+  if (!editId || !confirm(`Excluir o lead ${l?.nome || ''}? Essa ação não pode ser desfeita.`)) return;
   try {
-    await api(`/api/leads/${editId}`, { method: 'DELETE' });
-    fecharModal();
+    await api(`/api/leads/${encodeURIComponent(editId)}`, { method: 'DELETE' });
+    fecharModal(true);
     toast('🗑️ Lead excluído');
     await carregar();
   } catch (err) {
@@ -447,9 +368,10 @@ $('#btnExcluir').addEventListener('click', async () => {
 
 /* ---------------- Filtros ---------------- */
 let buscaT;
-$('#search').addEventListener('input', () => { clearTimeout(buscaT); buscaT = setTimeout(carregarLeads, 250); });
-$('#fStatus').addEventListener('change', carregarLeads);
-$('#fOrigem').addEventListener('change', carregarLeads);
+// a busca filtra o que já está na tela: sem ir ao servidor a cada letra
+$('#search').addEventListener('input', () => { clearTimeout(buscaT); buscaT = setTimeout(() => { PAG_LEADS = 1; refiltrar(); renderTabelaLeads(); renderKanban(); $('#leadCount').textContent = `${LEADS.length} registro${LEADS.length === 1 ? '' : 's'}`; }, 200); });
+$('#fStatus').addEventListener('change', () => { PAG_LEADS = 1; carregarLeads().catch(e => toast('⚠️ ' + e.message)); });
+$('#fOrigem').addEventListener('change', () => { PAG_LEADS = 1; carregarLeads().catch(e => toast('⚠️ ' + e.message)); });
 
 /* ---------------- IA ---------------- */
 /* Converte o markdown da IA em HTML. Processa BLOCO A BLOCO — a versão antiga
@@ -687,18 +609,21 @@ const iniciais = nome => String(nome ?? '?').trim().split(/\s+/)
 
 const modalCli = $('#modalCliBg');
 
+let CLIENTES = [], CLI_RESUMO = null, PAG_CLI = 1;
 async function carregarClientes() {
   const alvo = $('#tblClientes');
   const q = $('#buscaCliente').value.trim();
+  if (!CLIENTES.length) alvo.innerHTML = '<tbody><tr><td><div class="skeleton" aria-label="Carregando clientes"></div></td></tr></tbody>';
   try {
     const r = await api('/api/clientes' + (q ? `?q=${encodeURIComponent(q)}` : ''));
-    const lista = r.clientes || [];
+    if (q !== $('#buscaCliente').value.trim()) return;   // resposta de uma busca antiga
+    CLIENTES = r.clientes || []; CLI_RESUMO = r; PAG_CLI = 1;
 
     $('#cliKpis').innerHTML = `
       <div class="kpi"><div class="kpi-label">${r.filtrado ? 'Clientes encontrados' : 'Clientes na base'}</div>
-        <div class="kpi-value">${r.total}</div>
+        <div class="kpi-value">${r.total.toLocaleString('pt-BR')}</div>
         <div class="kpi-delta"><span class="flat">${r.filtrado
-          ? `de ${r.totalBase} na base` : 'compartilhada com a agenda'}</span></div></div>
+          ? `de ${r.totalBase.toLocaleString('pt-BR')} na base` : 'compartilhada com a agenda'}</span></div></div>
       <div class="kpi"><div class="kpi-label">Já faturado</div>
         <div class="kpi-value">${brl(r.faturamento)}</div>
         <div class="kpi-delta"><span class="flat">${r.filtrado
@@ -708,41 +633,41 @@ async function carregarClientes() {
         <div class="kpi-value">${brl(r.total ? r.faturamento / r.total : 0)}</div>
         <div class="kpi-delta"><span class="flat">média ${r.filtrado
           ? 'de quem apareceu na busca' : 'da base inteira'}</span></div></div>`;
-
-    $('#cliCount').textContent = `${lista.length} cliente${lista.length === 1 ? '' : 's'}`
-      + (q ? ' encontrados' : '');
-
-    if (!lista.length) {
-      alvo.innerHTML = `<tbody><tr><td class="muted" style="padding:26px;text-align:center">
-        ${q ? 'Nenhum cliente com esse termo.' : 'A base de clientes ainda está vazia.'}</td></tr></tbody>`;
-      return;
-    }
-
-    alvo.innerHTML = `<thead><tr><th>Cliente</th><th>Carro</th><th>Origem</th>
-        <th>Serviços</th><th>Em aberto</th><th>Já gastou</th><th>Último contato</th></tr></thead>
-      <tbody>${lista.map(c => `<tr data-id="${esc(c.id)}" tabindex="0">
-        <td><div class="cell-main">${esc(c.nome)}</div><div class="cell-sub">${esc(c.telefone)}</div></td>
-        <td><div class="cell-main">${esc(c.carro_modelo) || '—'}</div><div class="cell-sub">${esc(c.placa)}</div></td>
-        <td><span class="tag">${esc(LABEL_ORIGEM[c.origem] ?? c.origem ?? '—')}</span></td>
-        <td class="num">${c.servicos}</td>
-        <td class="num">${c.emAberto ? brl(c.emAberto) : '—'}</td>
-        <td class="num">${brl(c.gasto)}</td>
-        <td class="cell-sub">${dtAno(c.ultimoContato)}</td>
-      </tr>`).join('')}</tbody>`;
-
-    $$('tbody tr', alvo).forEach(tr => {
-      const abrir = () => abrirFichaCliente(tr.dataset.id);
-      tr.addEventListener('click', abrir);
-      // teclado: a linha é focável, então Enter/Espaço têm de abrir também
-      tr.addEventListener('keydown', e => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); abrir(); }
-      });
-    });
+    renderClientes();
   } catch (err) {
     alvo.innerHTML = `<tbody><tr><td style="padding:26px" class="muted">
       <div class="alert">Não consegui carregar os clientes: ${esc(err.message)}</div></td></tr></tbody>`;
   }
 }
+function renderClientes() {
+  const alvo = $('#tblClientes'), q = $('#buscaCliente').value.trim(), ord = $('#ordemClientes').value;
+  const lista = [...CLIENTES].sort((a, b) => ord === 'nome' ? String(a.nome).localeCompare(String(b.nome), 'pt-BR')
+    : ord === 'recente' ? String(b.ultimoContato).localeCompare(String(a.ultimoContato))
+    : ord === 'sumido' ? String(a.ultimoContato || '9').localeCompare(String(b.ultimoContato || '9'))
+    : b.gasto - a.gasto || String(b.ultimoContato).localeCompare(String(a.ultimoContato)));
+  $('#cliCount').textContent = `${lista.length.toLocaleString('pt-BR')} cliente${lista.length === 1 ? '' : 's'}` + (q ? ' encontrados' : '');
+  if (!lista.length) {
+    alvo.innerHTML = `<tbody><tr><td class="vazio-celula">${q ? 'Nenhum cliente com esse termo. Tente só o final do telefone ou a placa.' : 'A base de clientes ainda está vazia.'}</td></tr></tbody>`;
+    $('#pagClientes').innerHTML = ''; return;
+  }
+  const p = U.paginar(lista, PAG_CLI, 50); PAG_CLI = p.pagina;
+  alvo.innerHTML = `<thead><tr><th>Cliente</th><th>Carro</th><th>Origem</th>
+      <th class="num">Serviços</th><th class="num">Em aberto</th><th class="num">Já gastou</th><th>Último contato</th><th><span class="sr">Ações</span></th></tr></thead>
+    <tbody>${p.itens.map(c => `<tr data-id="${esc(c.id)}" tabindex="0" aria-label="Abrir ficha de ${esc(c.nome)}">
+      <td><div class="cell-main">${esc(c.nome)}</div><div class="cell-sub">${esc(U.formatarTelefone(c.telefone))}</div></td>
+      <td><div class="cell-main">${esc(c.carro_modelo) || '—'}</div><div class="cell-sub">${esc(c.placa)}</div></td>
+      <td><span class="tag">${esc(LABEL_ORIGEM[c.origem] ?? c.origem ?? '—')}</span></td>
+      <td class="num">${c.servicos}</td>
+      <td class="num">${c.emAberto ? brl(c.emAberto) : '—'}</td>
+      <td class="num">${brl(c.gasto)}</td>
+      <td class="cell-sub">${dtAno(c.ultimoContato)}</td>
+      <td class="col-acao">${U.linkWhatsApp(c.telefone) ? `<a class="mini-acao" href="${esc(U.linkWhatsApp(c.telefone))}" target="_blank" rel="noopener noreferrer" aria-label="WhatsApp de ${esc(c.nome)}" title="WhatsApp">🟢</a>` : ''}</td>
+    </tr>`).join('')}</tbody>`;
+  renderPaginacao($('#pagClientes'), p, n => { PAG_CLI = n; renderClientes(); $('#tblClientes').scrollIntoView({block: 'start', behavior: 'smooth'}); });
+}
+$('#ordemClientes').addEventListener('change', () => { PAG_CLI = 1; renderClientes(); });
+$('#tblClientes').addEventListener('click', e => { if (e.target.closest('a')) return; const tr = e.target.closest('tbody tr[data-id]'); if (tr) abrirFichaCliente(tr.dataset.id); });
+$('#tblClientes').addEventListener('keydown', e => { if (e.target.matches('tr[data-id]') && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); abrirFichaCliente(e.target.dataset.id); } });
 
 let buscaCliT;
 $('#buscaCliente').addEventListener('input', () => {
@@ -758,9 +683,10 @@ function fecharFichaCliente() {
 $('#modalCliX').addEventListener('click', fecharFichaCliente);
 modalCli.addEventListener('click', e => { if (e.target === modalCli) fecharFichaCliente(); });
 
-async function abrirFichaCliente(id) {
+async function abrirFichaCliente(id, opcoes = {}) {
   const alvo = $('#fichaCliente');
   alvo.innerHTML = '<div class="skeleton" aria-label="Carregando ficha"></div>';
+  if (modal.classList.contains('open') && !fecharModal()) return;
   modalCli.classList.add('open'); ativarDialogo(modalCli);
   document.body.style.overflow = 'hidden';
 
@@ -768,7 +694,7 @@ async function abrirFichaCliente(id) {
     const f = await api('/api/clientes/' + encodeURIComponent(id));
     const c = f.cliente, r = f.resumo;
 
-    const linhasLeads = f.leads.length ? f.leads.map(l => `<tr>
+    const linhasLeads = f.leads.length ? f.leads.map(l => `<tr data-lead="${esc(l.id)}" tabindex="0" class="clicavel" aria-label="Abrir lead ${esc(l.servico || '')}">
         <td><div class="cell-main">${esc(l.servico) || 'Serviço não informado'}</div>
             <div class="cell-sub">${esc(LABEL_ORIGEM[l.origem] ?? l.origem ?? '')} · ${dtAno(l.created_at)}</div></td>
         <td><span class="badge b-${esc(l.status)}">${esc(LABEL_STATUS[l.status] ?? l.status)}</span></td>
@@ -783,11 +709,12 @@ async function abrirFichaCliente(id) {
       </tr>`).join('') : '';
 
     alvo.innerHTML = `
+      <h3 class="sr" id="fichaCliTitulo">Ficha de ${esc(c.nome)}</h3>
       <div class="ficha-topo">
         <span class="avatar">${esc(iniciais(c.nome))}</span>
         <div>
           <div class="ficha-nome">${esc(c.nome)}</div>
-          <div class="ficha-sub">${esc(c.telefone)}${c.email ? ' · ' + esc(c.email) : ''}</div>
+          <div class="ficha-sub">${esc(U.formatarTelefone(c.telefone))}${c.email ? ' · ' + esc(c.email) : ''}</div>
           <div class="ficha-sub">${esc(c.carro_modelo) || 'Carro não informado'}${c.placa ? ' · ' + esc(c.placa) : ''}
             · cliente desde ${dtAno(c.created_at)}</div>
         </div>
@@ -800,7 +727,11 @@ async function abrirFichaCliente(id) {
         <div class="ficha-kpi"><span>Em aberto</span><b>${brl(r.emAberto)}</b></div>
         <div class="ficha-kpi"><span>Leads</span><b>${r.leads}</b></div>
         <div class="ficha-kpi"><span>Agendamentos</span><b>${r.agendamentos}</b></div>
+        <div class="ficha-kpi"><span>Faltas</span><b>${esc(r.faltas ?? 0)}</b></div>
+        <div class="ficha-kpi"><span>Último serviço</span><b>${esc(dtAno(r.ultimoServico))}</b></div>
       </div>
+      <div class="lf-acoes">${botaoAcao(U.linkConversa(c.telefone), 'Abrir conversa', '💬') + botaoAcao(U.linkWhatsApp(c.telefone), 'WhatsApp', '🟢') + botaoAcao(U.linkLigar(c.telefone), 'Ligar', '📞') + botaoAcao(U.linkAgenda(c.telefone), 'Agendar', '📅') + botaoAcao(U.linkComunicar(c.telefone), 'Mandar mensagem', '✉️')}
+        <button type="button" class="acao acao-forte" id="novoLeadCliente"><span aria-hidden="true">＋</span>Criar lead</button></div>
 
       <div class="ficha-bloco">
         <h4>Serviços já feitos</h4>
@@ -828,10 +759,12 @@ async function abrirFichaCliente(id) {
       <p class="muted" style="font-size:.78rem;margin-top:18px">
         "Já gastou" soma os leads concluídos mais os agendamentos concluídos que não vieram de
         um lead — assim o mesmo serviço não entra na conta duas vezes.</p>
-      <p>Faltas: ${esc(r.faltas ?? 0)} · Último serviço: ${esc(dtAno(r.ultimoServico))}</p>
-      <div id="preferenciasCliente"></div>
-      <a href="https://indycar-agendamentos.onrender.com" target="_blank" rel="noopener noreferrer">Abrir Agenda</a>`;
+      <div id="preferenciasCliente"></div>`;
     montarPreferencias(c);
+    modalCli.firstElementChild.setAttribute('aria-labelledby', 'fichaCliTitulo');
+    if (opcoes.criarLead) $('#novoLeadCliente').focus();
+    $('#novoLeadCliente').onclick = () => { fecharFichaCliente(); abrirModal(null, {nome: c.nome, telefone: c.telefone, carro_modelo: c.carro_modelo, placa: c.placa}); };
+    $$('tr[data-lead]', alvo).forEach(tr => { const ir = () => { fecharFichaCliente(); abrirModal(tr.dataset.lead); }; tr.onclick = ir; tr.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); ir(); } }; });
   } catch (err) {
     alvo.innerHTML = `<div class="alert">Não consegui abrir a ficha: ${esc(err.message)}</div>`;
   }

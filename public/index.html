@@ -37,6 +37,7 @@
   <meta name="apple-mobile-web-app-title" content="CRM" />
 </head>
 <body>
+<a class="pular" href="#conteudo">Pular para o conteúdo</a>
 
 <!-- ================= SIDEBAR ================= -->
 <aside class="sidebar">
@@ -77,7 +78,7 @@
     </button>
     <button class="nav-item" data-view="ia">
       <svg viewBox="0 0 24 24"><path d="M12 2l2.4 6.2L21 9.3l-4.8 4.3 1.3 6.4L12 16.8 6.5 20l1.3-6.4L3 9.3l6.6-1.1L12 2z" fill="currentColor"/></svg>
-      <span>Resumo com IA</span>
+      <span>IA</span>
     </button>
     <button class="nav-item" data-view="configuracoes">
       <svg viewBox="0 0 24 24"><path d="M19.4 13a7.8 7.8 0 000-2l2.1-1.6a.5.5 0 00.1-.6l-2-3.4a.5.5 0 00-.6-.2l-2.5 1a7.3 7.3 0 00-1.7-1l-.4-2.6a.5.5 0 00-.5-.4h-4a.5.5 0 00-.5.4l-.4 2.6a7.3 7.3 0 00-1.7 1l-2.5-1a.5.5 0 00-.6.2l-2 3.4a.5.5 0 00.1.6L4.6 11a7.8 7.8 0 000 2l-2.1 1.6a.5.5 0 00-.1.6l2 3.4a.5.5 0 00.6.2l2.5-1a7.3 7.3 0 001.7 1l.4 2.6a.5.5 0 00.5.4h4a.5.5 0 00.5-.4l.4-2.6a7.3 7.3 0 001.7-1l2.5 1a.5.5 0 00.6-.2l2-3.4a.5.5 0 00-.1-.6L19.4 13zM12 15.5a3.5 3.5 0 110-7 3.5 3.5 0 010 7z" fill="currentColor"/></svg>
@@ -92,6 +93,7 @@
       <span class="tema-ico" id="temaIco">🌙</span>
       <span class="tema-txt" id="temaTxt">Tema escuro</span>
     </button>
+    <button type="button" class="atalhos-btn" id="btnAtalhos" aria-label="Atalhos de teclado" title="Atalhos de teclado (?)">?</button>
     <span class="side-note">Av. Bandeirantes, 875 · Taubaté-SP</span>
   </div>
 </aside>
@@ -115,15 +117,56 @@
   <!-- ---------- DASHBOARD ---------- -->
   <div id="saudeSistema" role="status" hidden></div>
   <section class="view active" id="view-dashboard">
+    <div class="periodo-barra">
+      <div class="pilulas" id="periodoPilulas" role="group" aria-label="Período do painel">
+        <button type="button" class="filtro-pill" data-periodo="hoje" aria-pressed="false">Hoje</button>
+        <button type="button" class="filtro-pill ativo" data-periodo="7" aria-pressed="true">7 dias</button>
+        <button type="button" class="filtro-pill" data-periodo="30" aria-pressed="false">30 dias</button>
+        <button type="button" class="filtro-pill" data-periodo="mes" aria-pressed="false">Este mês</button>
+        <button type="button" class="filtro-pill" data-periodo="personalizado" aria-pressed="false">Personalizado</button>
+      </div>
+      <form class="periodo-datas" id="periodoDatas" hidden>
+        <label>De <input type="date" id="perIni" required /></label>
+        <label>Até <input type="date" id="perFim" required /></label>
+        <button class="btn btn-ghost sm" type="submit">Aplicar</button>
+      </form>
+      <span class="filter-count" id="periodoTxt" aria-live="polite"></span>
+    </div>
+    <section id="iaSlotPainel" class="ia-slot" aria-label="IA"></section>
     <div class="kpis" id="kpis"></div>
     <div class="grid-2">
       <div class="card">
-        <h3>Funil de vendas</h3>
-        <div id="funnelMini" class="funnel-mini"></div>
+        <div class="card-topo"><h3>Metas do mês</h3><button type="button" class="btn btn-ghost sm" id="btnMetas">Definir metas</button></div>
+        <div id="metasMes"></div>
       </div>
       <div class="card">
-        <h3>Origem dos leads (7 dias)</h3>
-        <div id="originMini" class="origin-list"></div>
+        <div class="card-topo"><h3>Precisam de atenção</h3><span class="filter-count" id="paradosCount"></span></div>
+        <div id="listaParados" class="lista-curta"></div>
+      </div>
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-topo"><h3>Meus lembretes</h3><span class="nota-local" title="Os lembretes ficam guardados neste navegador, separados por usuário. Não aparecem em outro aparelho.">só neste aparelho</span></div>
+        <form class="tarefa-form" id="formTarefaPainel">
+          <input id="tarefaTexto" maxlength="200" placeholder="Ex.: ligar para o João às 14h" aria-label="Novo lembrete" />
+          <input id="tarefaData" type="date" aria-label="Para quando" />
+          <button class="btn btn-primary sm" type="submit">Adicionar</button>
+        </form>
+        <div id="tarefasPainel" class="tarefas"></div>
+      </div>
+      <div class="card">
+        <h3>Funil por etapa</h3>
+        <div id="funnelMini" class="funnel-mini"></div>
+      </div>
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <h3>Conversão por origem</h3>
+        <div class="table-wrap"><table class="table" id="tblOrigemPainel"></table></div>
+      </div>
+      <div class="card">
+        <h3>Motivos de perda</h3>
+        <div id="motivosPerda"></div>
       </div>
     </div>
     <div class="card">
@@ -135,13 +178,26 @@
   <!-- ---------- LEADS ---------- -->
   <section class="view" id="view-leads">
     <div class="filters">
-      <select id="fStatus"><option value="">Todos os status</option></select>
-      <select id="fOrigem"><option value="">Todas as origens</option></select>
-      <label>Ordenar <select id="ordemLeads"><option value="recente">Mais recentes</option><option value="nome">Nome A–Z</option><option value="valor">Maior valor</option><option value="antigo">Mais antigos</option></select></label>
-      <button class="btn btn-ghost sm" id="limparFiltros">Limpar filtros</button><button class="btn btn-ghost sm" id="exportarLeads">Exportar CSV</button>
-      <span class="filter-count" id="leadCount"></span>
+      <select id="fStatus" aria-label="Filtrar por etapa"><option value="">Todos os status</option></select>
+      <select id="fOrigem" aria-label="Filtrar por origem"><option value="">Todas as origens</option></select>
+      <label>Ordenar <select id="ordemLeads"><option value="recente">Mais recentes</option><option value="nome">Nome A–Z</option><option value="valor">Maior valor</option><option value="antigo">Mais antigos</option><option value="parado">Mais tempo parado</option></select></label>
+      <label class="chk-pill"><input type="checkbox" id="soParados" /> Só parados</label>
+      <button class="btn btn-ghost sm" id="limparFiltros" type="button">Limpar filtros</button><button class="btn btn-ghost sm" id="exportarLeads" type="button">Exportar CSV</button>
+      <div class="colunas-menu">
+        <button class="btn btn-ghost sm" id="btnColunas" type="button" aria-expanded="false" aria-controls="painelColunas">Colunas</button>
+        <div id="painelColunas" class="pop" role="group" aria-label="Colunas visíveis" hidden></div>
+      </div>
+      <span class="filter-count" id="leadCount" aria-live="polite"></span>
     </div>
-    <div class="card"><div class="table-wrap"><table class="table" id="tblLeads"></table></div></div>
+    <div class="lote" id="barraLote" role="region" aria-label="Ações nos leads selecionados" hidden>
+      <strong id="loteQtd"></strong>
+      <select id="loteStatus" aria-label="Mudar etapa dos selecionados"><option value="">Mudar etapa…</option></select>
+      <select id="loteOrigem" aria-label="Atribuir origem aos selecionados"><option value="">Atribuir origem…</option></select>
+      <button class="btn btn-ghost sm" id="loteExportar" type="button">Exportar seleção</button>
+      <button class="btn btn-ghost sm" id="loteLimpar" type="button">Limpar seleção</button>
+    </div>
+    <div class="card"><div class="table-wrap"><table class="table" id="tblLeads"></table></div>
+      <nav class="paginacao" id="pagLeads" aria-label="Páginas de leads"></nav></div>
   </section>
 
   <!-- ---------- CLIENTES ---------- -->
@@ -149,22 +205,28 @@
     <div class="kpis" id="cliKpis"></div>
     <div class="card">
       <h3>Base de clientes</h3>
-      <p class="card-sub">É a mesma base da Agenda e do Atendimento — o cliente é reconhecido
-        pelo telefone nos três sistemas. Clique em alguém para ver a ficha completa.</p>
+      <p class="card-sub">Mesma base da Agenda e do Atendimento, reconhecida pelo telefone.</p>
       <div class="barra-busca">
         <div class="busca-local">
           <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 10-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1114 9.5 4.5 4.5 0 019.5 14z" fill="currentColor"/></svg>
-          <input id="buscaCliente" type="search" placeholder="Buscar por nome, telefone, placa ou carro…" />
+          <input id="buscaCliente" type="search" aria-label="Buscar cliente" placeholder="Buscar por nome, telefone, placa ou carro…" />
         </div>
-        <span class="filter-count" id="cliCount"></span>
+        <label class="ordem-cli">Ordenar <select id="ordemClientes"><option value="gasto">Quem mais gastou</option><option value="recente">Contato recente</option><option value="sumido">Sumidos há mais tempo</option><option value="nome">Nome A–Z</option></select></label>
+        <span class="filter-count" id="cliCount" aria-live="polite"></span>
       </div>
       <div class="table-wrap"><table class="table" id="tblClientes"></table></div>
+      <nav class="paginacao" id="pagClientes" aria-label="Páginas de clientes"></nav>
     </div>
   </section>
 
   <!-- ---------- PIPELINE ---------- -->
   <section class="view" id="view-pipeline">
+    <div class="kb-barra">
+      <p class="kb-dica">Arraste os cartões entre as etapas. No teclado: foco no cartão e <kbd>Shift</kbd> + <kbd>←</kbd> <kbd>→</kbd>.</p>
+      <span class="filter-count" id="kbResumo" aria-live="polite"></span>
+    </div>
     <div class="kanban" id="kanban"></div>
+    <p class="sr" id="kbAnuncio" aria-live="assertive"></p>
   </section>
 
   <!-- ---------- ORIGEM ---------- -->
@@ -337,6 +399,7 @@
 
   <!-- ---------- IA ---------- -->
   <section class="view" id="view-ia">
+    <section id="iaSlotTela" class="ia-slot" aria-label="IA"></section>
     <div class="card ia-card">
       <div class="ia-head">
         <div>
@@ -451,34 +514,56 @@
   </section>
 </main>
 
-<!-- ================= MODAL LEAD ================= -->
-<div class="modal-bg" id="modalBg">
-  <div class="modal">
+<!-- ================= GAVETA DO LEAD (ficha + edição) ================= -->
+<div class="modal-bg gaveta-bg" id="modalBg">
+  <div class="modal gaveta">
     <button class="modal-x" id="modalX" aria-label="Fechar lead" type="button">×</button>
     <h3 id="modalTitle">Novo Lead</h3>
-    <form id="leadForm">
+    <div id="leadFicha" hidden>
+      <div class="lf-topo" id="lfTopo"></div>
+      <div class="lf-acoes" id="lfAcoes"></div>
+      <section id="iaSlotLead" class="ia-slot" aria-label="IA"></section>
+      <div class="lf-etapas" id="lfEtapas" role="group" aria-label="Mudar etapa"></div>
+      <div class="lf-abas" role="tablist" aria-label="Partes da ficha">
+        <button type="button" role="tab" id="abaTl" aria-controls="painelTl" aria-selected="true">Linha do tempo</button>
+        <button type="button" role="tab" id="abaDados" aria-controls="painelDados" aria-selected="false" tabindex="-1">Dados</button>
+        <button type="button" role="tab" id="abaLembretes" aria-controls="painelLembretes" aria-selected="false" tabindex="-1">Lembretes <span id="lfQtdLembretes"></span></button>
+      </div>
+      <div role="tabpanel" id="painelTl" aria-labelledby="abaTl" class="lf-painel"><ol class="linha-tempo" id="linhaTempo"></ol></div>
+      <div role="tabpanel" id="painelLembretes" aria-labelledby="abaLembretes" class="lf-painel" hidden>
+        <form class="tarefa-form" id="formTarefaLead">
+          <input id="tarefaLeadTexto" maxlength="200" placeholder="Ex.: retornar com o orçamento" aria-label="Novo lembrete para este lead" />
+          <input id="tarefaLeadData" type="date" aria-label="Para quando" />
+          <button class="btn btn-primary sm" type="submit">Adicionar</button>
+        </form>
+        <div id="tarefasLead" class="tarefas"></div>
+        <p class="nota-local">Lembretes ficam só neste aparelho, separados por usuário.</p>
+      </div>
+    </div>
+    <div role="tabpanel" id="painelDados" aria-labelledby="abaDados" class="lf-painel">
+    <form id="leadForm" novalidate>
       <input type="hidden" id="fId" />
       <div class="row">
-        <label>Nome *<input id="fNome" maxlength="120" autocomplete="name" required placeholder="João da Silva" /></label>
-        <label>Telefone *<input id="fTelefone" type="tel" inputmode="tel" maxlength="20" required placeholder="(12) 9 9999-9999" /></label>
+        <label>Nome *<input id="fNome" maxlength="120" autocomplete="name" required placeholder="João da Silva" aria-describedby="erro-fNome" /><small class="campo-erro" id="erro-fNome"></small></label>
+        <label>Telefone *<input id="fTelefone" type="tel" inputmode="tel" maxlength="20" required placeholder="(12) 9 9999-9999" aria-describedby="erro-fTelefone" /><small class="campo-erro" id="erro-fTelefone"></small></label>
       </div>
       <div class="row">
-        <label>Carro<input id="fCarro" placeholder="Corolla 2018" /></label>
-        <label>Placa<input id="fPlaca" maxlength="8" placeholder="ABC1D23" /></label>
+        <label>Carro<input id="fCarro" maxlength="200" placeholder="Corolla 2018" /></label>
+        <label>Placa<input id="fPlaca" maxlength="8" placeholder="ABC1D23" autocapitalize="characters" aria-describedby="erro-fPlaca" /><small class="campo-erro" id="erro-fPlaca"></small></label>
       </div>
       <div class="row">
         <label>Serviço<select id="fServico"></select></label>
         <label>Origem<select id="fOrigemForm"></select></label>
       </div>
       <div class="row">
-        <label>Valor orçado (R$)<input id="fOrcado" type="number" step="0.01" min="0" placeholder="0,00" /></label>
-        <label>Valor pago (R$)<input id="fPago" type="number" step="0.01" min="0" placeholder="0,00" /></label>
+        <label>Valor orçado (R$)<input id="fOrcado" type="number" step="0.01" min="0" max="10000000" inputmode="decimal" placeholder="0,00" aria-describedby="erro-fOrcado" /><small class="campo-erro" id="erro-fOrcado"></small></label>
+        <label>Valor pago (R$)<input id="fPago" type="number" step="0.01" min="0" max="10000000" inputmode="decimal" placeholder="0,00" aria-describedby="erro-fPago" /><small class="campo-erro" id="erro-fPago"></small></label>
       </div>
       <div class="row">
         <label>Status<select id="fStatusForm"></select></label>
-        <label>Campanha (UTM)<input id="fCampanha" placeholder="ex: trafego-cambio" /></label>
+        <label>Campanha (UTM)<input id="fCampanha" maxlength="200" placeholder="ex: trafego-cambio" /></label>
       </div>
-      <label>Observações<textarea id="fObs" maxlength="4000" rows="2" placeholder="Detalhes do atendimento…"></textarea></label>
+      <label>Observações<textarea id="fObs" maxlength="4000" rows="3" placeholder="Detalhes do atendimento…"></textarea></label>
       <div class="modal-actions">
         <button type="button" class="btn btn-ghost" id="btnExcluir">Excluir</button>
         <div class="spacer"></div>
@@ -486,18 +571,70 @@
         <button type="submit" class="btn btn-primary">Salvar</button>
       </div>
     </form>
+    </div>
   </div>
 </div>
 
 <!-- ================= MODAL FICHA 360 DO CLIENTE ================= -->
 <div class="modal-bg" id="modalCliBg">
   <div class="modal largo">
-    <button class="modal-x" id="modalCliX" aria-label="Fechar ficha">×</button>
+    <button class="modal-x" id="modalCliX" type="button" aria-label="Fechar ficha">×</button>
     <div id="fichaCliente"></div>
   </div>
 </div>
 
-<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"><span id="toastTxt"></span><button type="button" id="toastAcao" hidden></button></div>
+
+<dialog class="dlg" id="dlgPerda" aria-labelledby="dlgPerdaT">
+  <form method="dialog" id="formPerda">
+    <h3 id="dlgPerdaT">Por que perdemos?</h3>
+    <p class="muted" id="dlgPerdaNome"></p>
+    <fieldset class="motivos" id="motivosPerdaOpcoes"><legend class="sr">Motivo da perda</legend></fieldset>
+    <label id="perdaOutroL" hidden>Qual foi o motivo?<input id="perdaOutro" maxlength="140" /></label>
+    <p class="form-erro" id="perdaErro" role="alert"></p>
+    <div class="modal-actions"><button type="button" class="btn btn-ghost" data-fechar>Cancelar</button><div class="spacer"></div><button type="submit" class="btn btn-primary">Marcar como perdido</button></div>
+  </form>
+</dialog>
+
+<dialog class="dlg" id="dlgPago" aria-labelledby="dlgPagoT">
+  <form method="dialog" id="formPago">
+    <h3 id="dlgPagoT">Quanto o cliente pagou?</h3>
+    <p class="muted" id="dlgPagoNome"></p>
+    <label>Valor pago (R$)<input id="pagoValor" type="number" min="0" max="10000000" step="0.01" inputmode="decimal" required /></label>
+    <button type="button" class="btn btn-ghost sm" id="pagoSugestao" hidden></button>
+    <p class="form-erro" id="pagoErro" role="alert"></p>
+    <div class="modal-actions"><button type="button" class="btn btn-ghost" data-fechar>Cancelar</button><div class="spacer"></div><button type="submit" class="btn btn-primary">Concluir</button></div>
+  </form>
+</dialog>
+
+<dialog class="dlg" id="dlgMetas" aria-labelledby="dlgMetasT">
+  <form method="dialog" id="formMetas">
+    <h3 id="dlgMetasT">Metas do mês</h3>
+    <label>Faturamento (R$)<input id="metaFat" type="number" min="0" max="10000000" step="100" inputmode="decimal" /></label>
+    <label>Serviços fechados<input id="metaFech" type="number" min="0" max="10000" step="1" inputmode="numeric" /></label>
+    <label>Leads novos<input id="metaLeads" type="number" min="0" max="100000" step="1" inputmode="numeric" /></label>
+    <p class="nota-local">As metas ficam guardadas neste aparelho.</p>
+    <div class="modal-actions"><button type="button" class="btn btn-ghost" data-fechar>Cancelar</button><div class="spacer"></div><button type="submit" class="btn btn-primary">Salvar metas</button></div>
+  </form>
+</dialog>
+
+<dialog class="dlg" id="dlgAtalhos" aria-labelledby="dlgAtalhosT">
+  <h3 id="dlgAtalhosT">Atalhos de teclado</h3>
+  <dl class="atalhos">
+    <dt><kbd>N</kbd></dt><dd>Novo lead</dd>
+    <dt><kbd>/</kbd></dt><dd>Buscar leads</dd>
+    <dt><kbd>G</kbd> <kbd>D</kbd></dt><dd>Dashboard</dd>
+    <dt><kbd>G</kbd> <kbd>L</kbd></dt><dd>Leads</dd>
+    <dt><kbd>G</kbd> <kbd>F</kbd></dt><dd>Funil</dd>
+    <dt><kbd>G</kbd> <kbd>C</kbd></dt><dd>Clientes</dd>
+    <dt><kbd>G</kbd> <kbd>I</kbd></dt><dd>IA</dd>
+    <dt><kbd>Shift</kbd> <kbd>←</kbd> <kbd>→</kbd></dt><dd>Mover o cartão do funil de etapa</dd>
+    <dt><kbd>Enter</kbd></dt><dd>Abrir o lead em foco</dd>
+    <dt><kbd>Esc</kbd></dt><dd>Fechar janela</dd>
+    <dt><kbd>?</kbd></dt><dd>Esta ajuda</dd>
+  </dl>
+  <div class="modal-actions"><div class="spacer"></div><button type="button" class="btn btn-primary" data-fechar>Entendi</button></div>
+</dialog>
 
 <!-- ================= LOGIN =================
      O CRM guarda dados de clientes e credenciais de Meta/Google.
