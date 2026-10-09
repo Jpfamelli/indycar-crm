@@ -32,7 +32,8 @@ const USA_SUPABASE = process.env.CRM_DB !== 'sqlite'
   && !!(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY);
 
 const store = USA_SUPABASE ? require('./db-supabase') : require('./db');
-const { gerarResumoSemanal } = require('./ia');
+const { gerarResumoSemanal, montarBriefing } = require('./ia');
+const { criarIACrm, ErroIA } = require('./lib/ia-crm');
 
 const PORT = process.env.PORT || 3100;
 const PUBLIC = path.join(__dirname, 'public');
@@ -187,6 +188,28 @@ async function usuarioLogado(req) {
     CACHE_LOGIN.set(token, { usuario, expira: Math.min(Date.now() + 60_000, vence || Infinity) });
     return usuario;
   } catch { return null; }
+}
+
+/* ------------------------------------------------------------
+   IA DO CRM — criada sob demanda (precisa do banco compartilhado)
+   ------------------------------------------------------------ */
+let IA_CRM = null;
+function iaCrm() {
+  if (!USA_SUPABASE) return null;
+  if (!IA_CRM) {
+    const sb = adminSupabase();
+    if (!sb) return null;
+    IA_CRM = criarIACrm({ sb, store, log: (...a) => console.warn('[ia-crm]', ...a) });
+  }
+  return IA_CRM;
+}
+/** Erro da IA vira resposta clara; o resto não vaza detalhe interno. */
+function erroIA(res, e) {
+  if (e instanceof ErroIA || (e && e.status && e.status < 600)) {
+    return json(res, e.status || 500, { erro: e.message, ...(e.precisaConfirmar ? { precisaConfirmar: true } : {}) });
+  }
+  console.error('IA do CRM:', e && e.message);
+  return json(res, 500, { erro: 'A IA do CRM falhou. Tente de novo.' });
 }
 
 /* ------------------------------------------------------------
@@ -387,9 +410,86 @@ const server = http.createServer(async (req, res) => {
         if (!sb) return json(res, 503, {erro:'Saúde indisponível.'});
         const {data,error} = await sb.from('vigia_estado').select('problema,desde,ultimo_resumo');
         if (error) return json(res,503,{erro:'Não foi possível consultar a saúde.'});
-        return json(res,200,{avisos:(data || []).filter(x => x.problema).map(x => ({problema:texto1(x.problema,240),desde:x.desde}))});
+        // status da IA junto: a tela mostra se ela está ligada e quanto já usou hoje
+        let ia = { configurada: !!process.env.ANTHROPIC_API_KEY, ativo: false };
+        try { const u = await iaCrm()?.uso(); if (u) ia = { configurada: u.configurada, ativo: u.ativo, autonomia: u.autonomia, hoje: u.hoje, limite: u.limite }; } catch { ia.indisponivel = true; }
+        return json(res,200,{avisos:(data || []).filter(x => x.problema).map(x => ({problema:texto1(x.problema,240),desde:x.desde})), ia});
       }
       if (req.method !== 'GET') statsCache = null;
+
+      /* ============================================================
+         IA DO CRM — /api/ia/*  (login exigido acima; toda ação em ia_acoes)
+         ============================================================ */
+      if (pathname === '/api/lead-por-telefone' && req.method === 'GET') {
+        if (!store.leadsPorTelefone) return json(res, 503, { erro: 'Disponível no banco compartilhado.' });
+        try { return json(res, 200, await store.leadsPorTelefone(url.searchParams.get('t') || '')); }
+        catch (e) { return erroIA(res, e); }
+      }
+
+      if (pathname.startsWith('/api/ia/')) {
+        const ia = iaCrm();
+        if (!ia) return json(res, 503, { erro: 'A IA do CRM precisa do banco compartilhado (Supabase).' });
+        // freio por pessoa nas rotas que chamam a Claude
+        const chamaIA = req.method === 'POST' && /^\/api\/ia\/(lead\/[^/]+\/(proxima-acao|qualificar|preencher)|triagem|perguntar)$/.test(pathname);
+        if (chamaIA && !dentroDoLimite(`ia:${quem.id}`, 40, 600_000)) {
+          return json(res, 429, { erro: 'Muitos pedidos à IA em pouco tempo. Espere alguns minutos.' });
+        }
+        try {
+          if (pathname === '/api/ia/uso' && req.method === 'GET') return json(res, 200, await ia.uso());
+          if (pathname === '/api/ia/acoes' && req.method === 'GET') {
+            const leadId = url.searchParams.get('leadId') || undefined;
+            return json(res, 200, { acoes: await ia.listarAcoes({ leadId, limite: Number(url.searchParams.get('limite')) || 30 }) });
+          }
+          const ml = pathname.match(/^\/api\/ia\/lead\/([^/]+)\/(contexto|proxima-acao|qualificar|preencher)$/);
+          if (ml) {
+            const [, leadId, oque] = ml;
+            if (!ehUuid(leadId)) return json(res, 400, { erro: 'Lead inválido.' });
+            if (oque === 'contexto' && req.method === 'GET') {
+              const ctx = await ia.contexto.montar({ leadId });
+              return ctx ? json(res, 200, ctx) : json(res, 404, { erro: 'Lead não encontrado.' });
+            }
+            if (req.method !== 'POST') return json(res, 405, { erro: 'método não permitido' });
+            if (oque === 'proxima-acao') return json(res, 200, await ia.proximaAcao(leadId, quem));
+            if (oque === 'qualificar') return json(res, 200, await ia.qualificar(leadId, quem));
+            if (oque === 'preencher') return json(res, 200, await ia.preencher(leadId, quem));
+          }
+          if (pathname === '/api/ia/triagem' && req.method === 'POST') {
+            const b = await readBody(req);
+            return json(res, 200, await ia.triagem({ dias: b.dias, limite: b.limite, usarIA: b.usarIA !== false }, quem));
+          }
+          if (pathname === '/api/ia/perguntar' && req.method === 'POST') {
+            const b = await readBody(req);
+            if (typeof b.pergunta !== 'string') return json(res, 400, { erro: 'Escreva a pergunta.' });
+            return json(res, 200, await ia.perguntar(b.pergunta, quem));
+          }
+          if (pathname === '/api/ia/acoes/executar-lote' && req.method === 'POST') {
+            const b = await readBody(req);
+            const ids = Array.isArray(b.ids) ? [...new Set(b.ids.filter(ehUuid))] : [];
+            if (!ids.length || ids.length > 30) return json(res, 400, { erro: 'Escolha de 1 a 30 ações.' });
+            const resultados = [];
+            for (const id of ids) {           // em série: cada uma confere o lead de novo
+              try { resultados.push({ id, ...(await ia.executar(id, quem, { confirmarFaturamento: b.confirmarFaturamento === true })) }); }
+              catch (e) { resultados.push({ id, ok: false, erro: e.message, status: e.status || 500, precisaConfirmar: !!e.precisaConfirmar }); }
+            }
+            return json(res, 200, { resultados, ok: resultados.filter(r => r.ok).length, falhas: resultados.filter(r => !r.ok).length });
+          }
+          const ma = pathname.match(/^\/api\/ia\/acoes\/([^/]+)\/(executar|recusar|desfazer)$/);
+          if (ma && req.method === 'POST') {
+            const [, id, oque] = ma;
+            if (!ehUuid(id)) return json(res, 400, { erro: 'Ação inválida.' });
+            const b = await readBody(req);
+            if (oque === 'executar') return json(res, 200, await ia.executar(id, quem, { confirmarFaturamento: b.confirmarFaturamento === true }));
+            if (oque === 'recusar') return json(res, 200, await ia.recusar(id, quem, b.motivo));
+            // desfazer: quem executou, ou admin/gestor
+            if (!['admin', 'gestor'].includes(quem.papel)) {
+              const dono = await ia.donoDaAcao(id);
+              if (dono && dono !== quem.id) return json(res, 403, { erro: 'Só quem executou (ou um gestor) pode desfazer.' });
+            }
+            return json(res, 200, await ia.desfazer(id, quem));
+          }
+          return json(res, 404, { erro: 'rota da IA não encontrada' });
+        } catch (e) { return erroIA(res, e); }
+      }
 
       // GET /api/leads?status=&origem=&q=
       if (pathname === '/api/leads' && req.method === 'GET') {
@@ -434,8 +534,28 @@ const server = http.createServer(async (req, res) => {
 
       // POST /api/resumo-ia  → resumo semanal gerado pela Claude
       if (pathname === '/api/resumo-ia' && req.method === 'POST') {
-        const resultado = await gerarResumoSemanal(await store.weeklyData());
-        return json(res, resultado.ok ? 200 : 503, resultado);
+        const b = await readBody(req);
+        const periodo = b.periodo === 'mes' ? 'mes' : 'semana';
+        const ia = iaCrm();
+        if (!ia) {
+          const resultado = await gerarResumoSemanal(await store.weeklyData(), { periodo: 'semana' });
+          return json(res, resultado.ok ? 200 : 503, resultado);
+        }
+        if (!dentroDoLimite(`ia:${quem.id}`, 40, 600_000)) return json(res, 429, { erro: 'Muitos pedidos à IA em pouco tempo. Espere alguns minutos.' });
+        try {
+          const cfg = await ia.config();
+          const dados = await ia.dadosResumo(periodo);
+          if (!cfg.ativo) return json(res, 503, { ok: false, erro: 'A IA está desligada nas configurações.', briefing: montarBriefing({ ...dados, periodo }) });
+          const u = await ia.uso();
+          if (u.restante <= 0) return json(res, 429, { ok: false, erro: 'Limite diário da IA atingido.' });
+          const resultado = await gerarResumoSemanal(dados, { periodo, modelo: cfg.modelo_forte, clienteIA: ia.obterIA() });
+          await ia.registrar({ tipo: 'crm_resumo', status: resultado.ok ? 'executada' : 'erro', perfil_id: quem.id,
+            executada_em: resultado.ok ? new Date().toISOString() : null, modelo: resultado.modelo || cfg.modelo_forte,
+            tokens_entrada: resultado.tokens?.entrada || 0, tokens_saida: resultado.tokens?.saida || 0, duracao_ms: resultado.duracaoMs || null,
+            entrada: { periodo }, resumo: `Resumo ${periodo === 'mes' ? 'mensal' : 'semanal'}`, erro: resultado.ok ? null : String(resultado.erro || '').slice(0, 300),
+            saida: resultado.ok ? { truncado: resultado.truncado, tamanho: resultado.resumo.length } : null });
+          return json(res, resultado.ok ? 200 : 503, resultado);
+        } catch (e) { return erroIA(res, e); }
       }
 
       /* /api/seed foi REMOVIDA de propósito.

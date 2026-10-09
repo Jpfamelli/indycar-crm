@@ -444,3 +444,43 @@ module.exports.atualizarPreferenciasCliente = async function(id, dados) {
   const {data,error} = await sb.from('clientes').update(patch).eq('id',id).select('id,nascimento,aceita_mensagens,aceita_mensagens_em').maybeSingle();
   erro('atualizarPreferenciasCliente',error); return data;
 };
+
+/* Campos do carro no cliente compartilhado (usado pela IA ao preencher pela
+   conversa e ao desfazer). Só estas colunas; `antes` protege contra
+   sobrescrever o que alguém mudou depois da proposta. */
+const CAMPOS_CARRO_CLIENTE = ['carro_ano', 'carro_modelo', 'placa'];
+module.exports.atualizarCamposCliente = async function(id, depois = {}, antes = null) {
+  const patch = {};
+  for (const k of CAMPOS_CARRO_CLIENTE) if (k in depois) patch[k] = depois[k] == null ? null : String(depois[k]).slice(0, 80);
+  if (!Object.keys(patch).length) throw Object.assign(new Error('Nada para atualizar no cliente.'), { status: 400 });
+  if (antes) {
+    const { data: atual, error: e } = await sb.from('clientes').select(Object.keys(patch).join(',')).eq('id', id).maybeSingle();
+    erro('atualizarCamposCliente/ler', e);
+    if (!atual) throw Object.assign(new Error('Cliente não encontrado.'), { status: 404 });
+    for (const k of Object.keys(patch)) if (String(atual[k] ?? '') !== String(antes[k] ?? '')) throw Object.assign(new Error('O cliente mudou desde a proposta.'), { status: 409 });
+  }
+  const { data, error } = await sb.from('clientes').update(patch).eq('id', id).select('id,carro_ano,carro_modelo,placa').maybeSingle();
+  erro('atualizarCamposCliente', error);
+  return data;
+};
+
+/* Leads e cliente de um telefone (com ou sem 55, com ou sem o nono dígito). */
+module.exports.leadsPorTelefone = async function(telefone) {
+  const d = String(telefone ?? '').replace(/\D/g, '');
+  if (d.length < 10 || d.length > 13) throw Object.assign(new Error('Informe o telefone com DDD.'), { status: 400 });
+  const chave = d.slice(-8);
+  const local = (d.length >= 12 && d.startsWith('55')) ? d.slice(2) : d;
+  const vs = new Set([local]);
+  if (local.length === 11 && local[2] === '9') vs.add(local.slice(0, 2) + local.slice(3));
+  if (local.length === 10) vs.add(local.slice(0, 2) + '9' + local.slice(2));
+  const [{ data: cli, error: e1 }, { data: ls, error: e2 }] = await Promise.all([
+    sb.from('clientes').select('id,nome,telefone,carro_modelo,placa').in('telefone_e164', [...vs]).limit(1),
+    sb.from('leads').select('id,cliente_id,nome,telefone,status,origem,servico,created_at,updated_at').like('telefone', `%${chave}`).order('created_at', { ascending: false }).limit(20),
+  ]);
+  erro('leadsPorTelefone/cliente', e1); erro('leadsPorTelefone/leads', e2);
+  const cliente = (cli || [])[0] || null;
+  // o like pelos 8 finais pode trazer outro DDD: confere o número inteiro
+  const leads = (ls || []).filter(l => { const x = String(l.telefone ?? '').replace(/\D/g, ''); const y = (x.length >= 12 && x.startsWith('55')) ? x.slice(2) : x; return vs.has(y) || (cliente && l.cliente_id === cliente.id); });
+  const aberto = leads.find(l => !['concluido', 'perdido'].includes(l.status)) || null;
+  return { cliente, leads, aberto };
+};
