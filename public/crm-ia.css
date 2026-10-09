@@ -1,0 +1,170 @@
+/* ============================================================
+   IndyCar CRM — IA na tela (crm-ia.js)
+   Só fala por var(--...) da casa: tema claro/escuro vem de graça.
+   Prefixo cia- para não colidir com .ia-card/.ia-head do resumo.
+   ============================================================ */
+[hidden]{display:none!important}
+
+.cia{--cia-brilho:linear-gradient(135deg,rgba(229,9,20,.14),rgba(229,9,20,0) 60%);
+  font-family:var(--font-body,var(--font,'DM Sans',sans-serif));color:var(--texto);min-width:0}
+.cia *{box-sizing:border-box}
+
+/* ---------- bloco do lead ---------- */
+.cia-lead{position:relative;margin:14px 0;padding:14px 14px 10px;border:1px solid var(--line);border-radius:var(--radius,14px);
+  background:var(--cia-brilho),var(--card);box-shadow:var(--sombra-card)}
+.cia-lead::before{content:"";position:absolute;inset:0 auto 0 0;width:3px;border-radius:3px 0 0 3px;background:var(--red)}
+.cia-topo{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.cia-marca{font-family:var(--font-cond);font-weight:700;font-size:1.15rem;letter-spacing:.02em;text-transform:uppercase;color:var(--texto-forte)}
+.cia-modo{margin-left:auto;font-size:.74rem;color:var(--gray-2);border:1px solid var(--line);border-radius:30px;padding:2px 9px}
+
+.cia-sinais{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;font-size:.8rem;color:var(--texto-suave)}
+.cia-sinais>span{background:var(--superficie);border:1px solid var(--line-2);border-radius:8px;padding:3px 8px;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.cia-sinais>.cia-alerta{color:var(--amarelo-txt);border-color:color-mix(in srgb,var(--warn) 45%,transparent);font-weight:700}
+.cia-links{display:flex;gap:10px;background:none!important;border:0!important;padding:3px 2px!important}
+.cia-links a{color:var(--azul-txt);text-decoration:none;font-weight:700}
+.cia-links a:hover{text-decoration:underline}
+.cia-esqueleto{display:block;height:22px;width:70%;border-radius:8px;background:linear-gradient(90deg,var(--superficie),var(--superficie-2),var(--superficie));background-size:200% 100%;animation:cia-brilha 1.2s linear infinite}
+@keyframes cia-brilha{to{background-position:-200% 0}}
+
+.cia-botoes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+@media (max-width:520px){.cia-botoes{grid-template-columns:1fr 1fr}.cia-botoes [data-ia="proxima"]{grid-column:1/-1}}
+
+/* ---------- botões ---------- */
+.cia-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:40px;padding:8px 13px;border-radius:10px;
+  border:1px solid var(--line);background:var(--superficie);color:var(--texto);font:600 .86rem/1.2 var(--font-body,var(--font));cursor:pointer;
+  transition:background .15s,border-color .15s,transform .15s}
+.cia-btn:hover:not(:disabled){background:var(--superficie-2);border-color:var(--red)}
+.cia-btn:active:not(:disabled){transform:scale(.97)}
+.cia-btn:disabled{opacity:.55;cursor:not-allowed}
+.cia-btn[aria-busy="true"]{cursor:progress}
+.cia-btn.sm{min-height:34px;padding:6px 10px;font-size:.8rem}
+.cia-btn-forte{background:linear-gradient(135deg,var(--red),var(--red-dark));border-color:transparent;color:#fff}
+.cia-btn-forte:hover:not(:disabled){background:linear-gradient(135deg,var(--red),var(--red-dark));box-shadow:0 8px 20px var(--red-glow);border-color:transparent}
+.cia :is(button,a,input,select,summary):focus-visible,.cia-fab:focus-visible,.cia-gaveta :focus-visible{outline:2px solid var(--red);outline-offset:2px}
+.cia-spin{width:14px;height:14px;border-radius:50%;border:2px solid var(--spin-trilho);border-top-color:var(--spin-ponta);animation:cia-gira .8s linear infinite}
+.cia-btn-forte .cia-spin{border-color:rgba(255,255,255,.35);border-top-color:#fff}
+@keyframes cia-gira{to{transform:rotate(360deg)}}
+
+/* ---------- cartões de resultado ---------- */
+.cia-saida:not(:empty){margin-top:10px}
+.cia-card{border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--card-2);animation:cia-entra .25s var(--ease,ease-out)}
+@keyframes cia-entra{from{opacity:0;transform:translateY(4px)}}
+.cia-card header{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.cia-card header b{font-family:var(--font-cond);font-size:1.12rem;letter-spacing:.01em}
+.cia-ico{font-size:1.1rem}
+.cia-just{margin:6px 0 0;font-size:.88rem;color:var(--texto-suave);line-height:1.45;overflow-wrap:anywhere}
+.cia-texto{margin:10px 0 0;padding:10px 12px;border-left:3px solid var(--ok);border-radius:0 10px 10px 0;background:var(--superficie);
+  font-size:.9rem;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
+.cia-aviso{margin:8px 0 0;font-size:.82rem;color:var(--amarelo-txt)}
+.cia-dica{font-size:.8rem;color:var(--gray-2)}
+.cia-acoes{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
+.cia-prio{margin-left:auto;font:700 .7rem/1 var(--font-cond);letter-spacing:.06em;text-transform:uppercase;padding:4px 8px;border-radius:30px;background:var(--superficie-2);color:var(--neutro-txt)}
+.cia-prio.p-alta{background:color-mix(in srgb,var(--red) 18%,transparent);color:var(--vermelho-txt)}
+.cia-prio.p-media{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--amarelo-txt)}
+.cia-prio.p-baixa{background:color-mix(in srgb,var(--info) 18%,transparent);color:var(--azul-txt)}
+.cia-fat{display:inline-block;font:700 .65rem/1 var(--font-cond);padding:3px 5px;border-radius:5px;background:color-mix(in srgb,var(--warn) 25%,transparent);color:var(--amarelo-txt)}
+.cia-btn-forte .cia-fat{background:rgba(255,255,255,.22);color:#fff}
+
+/* qualificação */
+.cia-tempchip{font:700 .78rem/1 var(--font-cond);letter-spacing:.06em;text-transform:uppercase;padding:5px 10px;border-radius:30px}
+.cia-tempchip.t-q{background:color-mix(in srgb,var(--red) 22%,transparent);color:var(--vermelho-txt)}
+.cia-tempchip.t-m{background:color-mix(in srgb,var(--warn) 22%,transparent);color:var(--amarelo-txt)}
+.cia-tempchip.t-f{background:color-mix(in srgb,var(--info) 22%,transparent);color:var(--azul-txt)}
+.cia-card header .cia-tempchip{margin-left:auto}
+.cia-prob{display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap}
+.cia-prob meter{flex:1 1 140px;height:10px}
+.cia-prob b{font:700 1.5rem/1 var(--font-cond)}
+.cia-prob span{font-size:.8rem;color:var(--gray-2)}
+.cia-tags{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 0;padding:0;list-style:none}
+.cia-tags li{font-size:.76rem;padding:3px 8px;border-radius:30px;background:var(--superficie-2);color:var(--texto-suave)}
+
+/* preencher */
+.cia-tabela{overflow-x:auto;margin-top:8px}
+.cia-tabela table{width:100%;border-collapse:collapse;font-size:.86rem}
+.cia-tabela th,.cia-tabela td{padding:6px 8px;text-align:left;border-bottom:1px solid var(--line-2);overflow-wrap:break-word;word-break:normal;hyphens:auto}
+.cia-tabela thead th{font:600 .72rem/1 var(--font-body,var(--font));text-transform:uppercase;letter-spacing:.05em;color:var(--gray-2)}
+.cia-tabela tbody th{color:var(--rotulo);font-weight:600}
+.cia-tabela i{color:var(--gray-2)}
+
+/* pílulas de status (histórico) */
+.cia-pilula{display:inline-block;font:700 .7rem/1 var(--font-cond);letter-spacing:.05em;text-transform:uppercase;padding:4px 8px;border-radius:30px;background:var(--superficie-2);color:var(--neutro-txt);white-space:nowrap}
+.cia-pilula.s-proposta{color:var(--amarelo-txt);background:color-mix(in srgb,var(--warn) 18%,transparent)}
+.cia-pilula.s-executada{color:var(--verde-txt);background:color-mix(in srgb,var(--ok) 18%,transparent)}
+.cia-pilula.s-recusada,.cia-pilula.s-desfeita{color:var(--neutro-txt)}
+.cia-pilula.s-erro{color:var(--vermelho-txt);background:color-mix(in srgb,var(--red) 16%,transparent)}
+
+/* histórico */
+.cia-hist{margin-top:10px;border-top:1px solid var(--line-2);padding-top:8px}
+.cia-hist summary{cursor:pointer;font-size:.84rem;font-weight:700;color:var(--texto-suave);padding:4px 0;list-style-position:inside}
+.cia-lista{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:8px}
+.cia-lista>li{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:8px;align-items:start;font-size:.84rem}
+.cia-lista>li .cia-acoes{margin-top:0}
+.cia-hist-txt{color:var(--texto-suave);overflow-wrap:anywhere}
+.cia-hist-txt small{display:block;color:var(--gray-2);font-size:.74rem;margin-top:2px}
+.cia-vazio{display:block!important;color:var(--gray-2);font-size:.84rem;padding:6px 0}
+@media (max-width:520px){.cia-lista>li{grid-template-columns:auto minmax(0,1fr)}.cia-lista>li>.cia-acoes{grid-column:1/-1}}
+
+/* ---------- painel (dashboard / aba IA) ---------- */
+.cia-painel{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:0 0 18px}
+@media (max-width:900px){.cia-painel{grid-template-columns:1fr}}
+.cia-bloco{border:1px solid var(--line);border-radius:var(--radius,14px);padding:16px;background:var(--cia-brilho),var(--card);box-shadow:var(--sombra-card);min-width:0}
+.cia-titulo{margin:0 0 10px;font:700 1.3rem/1.1 var(--font-cond);letter-spacing:.01em;color:var(--texto-forte)}
+.cia-titulo-linha{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+.cia-titulo-linha .cia-titulo{margin:0 auto 0 0}
+.cia-dias{font-size:.8rem;color:var(--gray-2);display:flex;align-items:center;gap:6px}
+.cia-dias select,.cia-form input{min-height:40px;border-radius:10px;border:1px solid var(--line);background:var(--campo-fundo);color:var(--texto);font:inherit;padding:6px 10px;color-scheme:var(--scheme)}
+.cia-form{display:flex;gap:8px}
+.cia-form input{flex:1;min-width:0;font-size:.92rem}
+.cia-form input:focus{outline:none;border-color:var(--red);box-shadow:0 0 0 3px rgba(229,9,20,.16)}
+@media (max-width:420px){.cia-form{flex-direction:column}}
+.cia-exemplos,.cia-leads{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.cia-chip{border:1px dashed var(--line);background:transparent;color:var(--texto-suave);border-radius:30px;padding:5px 10px;font:500 .78rem/1.2 var(--font-body,var(--font));cursor:pointer;text-align:left;max-width:100%}
+.cia-chip:hover{border-color:var(--red);color:var(--texto)}
+.cia-chip small{color:var(--gray-2);margin-left:4px}
+.cia-leads .cia-chip{border-style:solid;background:var(--superficie)}
+.cia-respostas{list-style:none;margin:12px 0 0;padding:0;display:flex;flex-direction:column;gap:10px}
+.cia-resp{border-top:1px solid var(--line-2);padding-top:10px;animation:cia-entra .25s var(--ease,ease-out)}
+.cia-perg{margin:0;font-size:.8rem;color:var(--gray-2)}
+.cia-perg::before{content:"Você: "}
+.cia-txt{margin:4px 0 0;font-size:.95rem;line-height:1.5;overflow-wrap:anywhere}
+.cia-semdados{color:var(--amarelo-txt)}
+
+.cia-lote{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:8px 0;font-size:.84rem;color:var(--texto-suave);flex-wrap:wrap}
+.cia-lote label{display:flex;align-items:center;gap:6px;cursor:pointer}
+.cia-tri{max-height:520px;overflow:auto;padding-right:2px}
+.cia-tri-item{padding:10px 0;border-top:1px solid var(--line-2);grid-template-columns:auto minmax(0,1fr)!important}
+.cia-tri-item>.cia-acoes{grid-column:2;margin-top:6px!important}
+.cia-tri-item:first-child{border-top:0}
+.cia-tri-corpo p{margin:4px 0 0;font-size:.86rem;color:var(--texto-suave);line-height:1.4;overflow-wrap:anywhere}
+.cia-tri-corpo details{margin-top:4px;font-size:.82rem}
+.cia-tri-corpo summary{cursor:pointer;color:var(--azul-txt)}
+.cia-tri-top{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.cia-link{border:0;background:none;padding:0;color:var(--texto-forte);font:700 .95rem/1.2 var(--font-body,var(--font));cursor:pointer;text-align:left}
+.cia-link:hover{color:var(--red);text-decoration:underline}
+.cia-tag{font-size:.72rem;color:var(--gray-2);border:1px solid var(--line);border-radius:30px;padding:2px 8px}
+.cia-sel{width:18px;height:18px;margin-top:3px;accent-color:var(--red)}
+
+/* uso do dia (aba IA) */
+.cia-uso{grid-column:1/-1;display:flex;align-items:center;gap:14px;flex-wrap:wrap;justify-content:space-between;margin-bottom:14px;padding:14px 16px;border:1px solid var(--line);border-radius:var(--radius,14px);background:var(--card)}
+.cia-uso>div{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.cia-uso-barra{font-size:.8rem;color:var(--gray-2)}
+.cia-uso-barra meter{width:160px;height:10px}
+
+/* ---------- reserva: botão flutuante + gaveta ---------- */
+.cia-fab{position:fixed;right:18px;bottom:18px;z-index:900;display:flex;align-items:center;gap:6px;min-height:48px;padding:10px 18px;border:0;border-radius:30px;
+  background:linear-gradient(135deg,var(--red),var(--red-dark));color:#fff;font:700 1.05rem/1 var(--font-cond);letter-spacing:.04em;cursor:pointer;box-shadow:0 10px 28px var(--red-glow)}
+.cia-fab:hover{transform:translateY(-2px)}
+.cia-gaveta-bg{position:fixed;inset:0;z-index:950;background:var(--overlay);display:flex;justify-content:flex-end}
+.cia-gaveta{width:min(560px,100vw);height:100%;overflow:auto;background:linear-gradient(165deg,var(--pop-1),var(--pop-2));border-left:1px solid var(--line);padding:16px;box-shadow:var(--sombra-pop)}
+.cia-gaveta:focus{outline:none}
+.cia-gav-topo{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.cia-gav-topo h2{margin:0;font:700 1.5rem/1 var(--font-cond);color:var(--texto-forte)}
+.cia-x{width:40px;height:40px;border-radius:10px;border:1px solid var(--line);background:var(--superficie);color:var(--texto);font-size:1.4rem;cursor:pointer}
+.cia-gaveta .cia-painel{grid-template-columns:1fr}
+.cia-toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:1000;max-width:calc(100vw - 32px);padding:10px 16px;border-radius:12px;background:var(--pop-solid);color:var(--texto);border:1px solid var(--line);box-shadow:var(--sombra-pop);font-size:.9rem}
+
+@media (prefers-reduced-motion:reduce){
+  .cia-card,.cia-resp{animation:none}.cia-esqueleto{animation:none}.cia-spin{animation-duration:2s}
+  .cia-btn,.cia-fab{transition:none}
+}
+html[data-trocando-tema] .cia *{transition:none!important}

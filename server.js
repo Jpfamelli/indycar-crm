@@ -422,7 +422,8 @@ const server = http.createServer(async (req, res) => {
          ============================================================ */
       if (pathname === '/api/lead-por-telefone' && req.method === 'GET') {
         if (!store.leadsPorTelefone) return json(res, 503, { erro: 'Disponível no banco compartilhado.' });
-        try { return json(res, 200, await store.leadsPorTelefone(url.searchParams.get('t') || '')); }
+        // aceita ?t= e ?tel= ; 'lead' = o aberto (ou o mais recente), para abrir a ficha direto
+        try { const r = await store.leadsPorTelefone(url.searchParams.get('t') || url.searchParams.get('tel') || ''); return json(res, 200, { ...r, lead: r.aberto || r.leads[0] || null }); }
         catch (e) { return erroIA(res, e); }
       }
 

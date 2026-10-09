@@ -145,7 +145,8 @@ test('perguntar, triagem, lote, uso, saúde, lead por telefone e resumo mensal',
 
     assert.equal((await s.req('/api/lead-por-telefone?t=12')).status, 400);
     const tel = await s.req('/api/lead-por-telefone?t=(12)%2090000-0001');
-    assert.equal(tel.status, 200); assert.equal(tel.corpo.leads[0].id, L1);
+    assert.equal(tel.status, 200); assert.equal(tel.corpo.leads[0].id, L1); assert.equal(tel.corpo.lead.id, L1);
+    assert.equal((await s.req('/api/lead-por-telefone?tel=5512900000001')).corpo.lead.id, L1, 'aceita ?tel=');
 
     const r = await s.post('/api/resumo-ia', { periodo: 'mes' });
     assert.equal(r.status, 200); assert.equal(r.corpo.periodo, 'mes'); assert.equal(r.corpo.modelo, 'modelo-forte-teste');
