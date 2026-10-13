@@ -301,3 +301,210 @@ Cada item foi conferido no servidor falso (`npm run mock`) no Chrome (puppeteer-
 - Chrome (puppeteer-core) no mock: arrastar com mouse e toque, Shift+setas, perda com/sem motivo, conclusão com valor, cancelar, desfazer, lote + desfazer, colunas, páginas, só parados, atalhos, validação, duplicado, alteração não salva, lembretes, metas, período, tema claro, ficha 360 → criar lead, links `?cliente=&tel=` / `?tel=` / sem lead, login sem IA, crm-ia.js real (Próxima ação respondendo no slot). Zero erros de página. Sem rolagem horizontal em 375 px.
 - Nada contra o banco real além de uma leitura das colunas de `leads`/`clientes`.
 
+
+
+# Rodada 3 (13/10/2026) — segurança, equipe, tarefas, metas
+
+## 
+Só o que ficou feito e verificado (testes `node --test`, servidor real local em leitura, Chrome).
+
+## Acesso e login
+1. Porteiro novo (`lib/acesso.js`): exige perfil ativo, papel da equipe (admin, gestor ou atendente) e `crm` em `perfis.apps`; admin sempre entra.
+2. Recusas com código: 401 `sem_login`, `sessao_expirada`, `sessao_invalida` e `desativado`.
+3. 403 `sem_acesso_app` (papel agenda ou sem o CRM) traz os apps que a pessoa pode abrir, com o link de cada um.
+4. 403 `sem_perfil` para usuário do Auth que ainda não tem cadastro na equipe.
+5. Auth fora do ar responde 503 `indisponivel` em vez de 401 (a tela não desloga ninguém por falha de rede).
+6. Token JWT vencido é recusado sem nem consultar o Auth.
+7. Último acesso (`ultimo_acesso_em` e `ultimo_app='crm'`) gravado no máximo a cada 5 minutos por pessoa.
+8. `GET /api/eu`: perfil completo, apps, troca obrigatória de senha, outros apps com link e o mapa `pode` (o que mostrar na tela).
+9. Desativar, mudar papel, mudar apps, trocar senha ou editar o perfil esquecem o login em cache: o corte é imediato.
+10. Desativar grava `desativado_em` e `desativado_por`; reativar limpa os dois.
+
+## Equipe
+11. Papel `gestor` aceito ao criar pessoa e ao mudar a função (antes só admin, atendente e agenda).
+12. Quem vira papel `agenda` fica só com o app Agenda; quem sai dele volta a ter todos os apps.
+13. `POST /api/equipe/apps` (admin) com lista de apps validada e auditoria antes/depois.
+14. `POST /api/equipe/recebe-leads` (gestor) liga/desliga quem entra no rodízio, auditado.
+15. `POST /api/equipe/senha-temporaria` (admin, nunca para si): senha de 12 caracteres sem letras ambíguas, devolvida uma vez, liga `precisa_trocar_senha` e não vai para a auditoria.
+16. Criar pessoa grava apps, cargo, `convidado_por` e `precisa_trocar_senha=true`.
+17. `GET /api/equipe`: gestor vê a equipe inteira (com apps, cargo, último acesso, recebe leads); atendente só o próprio cadastro.
+18. `GET /api/vendedores`: quem pode receber leads do CRM, com carga em aberto e "eu", sem e-mail.
+
+## Responsável pelo lead
+19. Lead criado pelo CRM nasce com quem criou como responsável (o servidor usa a chave de serviço e o gatilho não via o `auth.uid()`).
+20. Responsável inválido na criação (papel agenda, desativado, sem o CRM) → 400.
+21. `GET /api/leads?minhas=1` e `?responsavel=eu|nenhum|<uuid>`, com validação do parâmetro.
+22. `PATCH /api/leads/:id/responsavel`: atendente pega lead sem dono e passa o próprio; só gestor tira o dono ou mexe no lead do colega.
+23. Troca otimista: se outra pessoa mudou o dono no meio, devolve 409 e não sobrescreve.
+24. Reatribuição auditada com de/para e motivo (a notificação sai pelo gatilho do banco).
+25. `POST /api/leads/responsavel-lote` (gestor, até 200 leads) auditado com a quantidade e os ids.
+26. Rodízio: menor carga primeiro, empate para quem recebeu há mais tempo; respeita `recebe_leads`, ativo e o app CRM.
+27. Rodízio automático só pega leads novos das últimas 48 h (os 222 antigos sem dono não são despejados em ninguém); a rota manual tem `todos` e `simular`.
+28. Rodízio atualiza `perfis.ultimo_lead_em` e é auditado.
+29. Apagar lead só gestor (403 `so_gestor`), com o retrato do lead na auditoria.
+30. Auditoria de fechamento (concluído/perdido), reabertura e mudança de valores, com quem fez.
+31. Lista de leads e estatísticas leem de 1000 em 1000 (antes a consulta parava em 1000 leads).
+
+## Desempenho e metas
+32. `GET /api/desempenho`: por vendedor, leads, agendados, vendas, perdidos, faturamento, abertos, conversão, ticket e tempo de resposta (mediana).
+33. Venda conta pela data de fechamento; agendamento cancelado não conta; resposta de mais de 7 dias fica fora do tempo de resposta.
+34. Linha "sem responsável" e total da loja no mesmo retorno.
+35. Ranking por faturamento, depois vendas e conversão (`GET /api/ranking` para todos).
+36. Atendente recebe só a própria linha de desempenho; gestor vê todos.
+37. Período por mês no fuso de São Paulo (`mes=AAAA-MM`) ou por dias (1 a 365).
+38. `GET /api/metas`: meta, realizado, progresso, projeção e risco de cada número, da loja e de cada pessoa, com status (sem meta, ok, risco, batida, não batida).
+39. `PUT /api/metas` só gestor, uma meta ou um lote (valida todas antes de gravar), sem duplicar a do mesmo mês.
+40. Metas validadas (mês, números de 0 a 100 mil / R$ 10 milhões, pessoa da equipe do CRM) e auditadas com antes/depois.
+
+## Tarefas
+41. `GET /api/tarefas` com minhas, lead, cliente, situação e responsável; traz nome do lead e da pessoa e a contagem de abertas, atrasadas e para hoje.
+42. Ordem útil: prazo mais perto primeiro, sem prazo depois, feitas por último.
+43. `POST /api/tarefas` valida título, prazo, prioridade e vínculos; o cliente vem do lead sozinho.
+44. `PATCH /api/tarefas/:id` só para quem cuida, quem criou ou gestor; concluir grava `concluida_por` (o gatilho não vê o usuário no servidor).
+45. Reatribuir tarefa é auditado; `DELETE` só de quem criou ou de gestor, auditado.
+
+## IA do CRM
+46. Nova ação `criar_tarefa` na próxima ação (esquema strict com título e prazo de 1 a 336 h); a tarefa vai para o dono do lead.
+47. Desfazer uma ação de tarefa cancela a tarefa criada.
+48. No modo automático, a tarefa da próxima ação é criada sozinha (é segura e se desfaz).
+49. Cada item da triagem traz a tarefa sugerida; no modo automático a triagem cria as tarefas sem duplicar lead que já tem tarefa aberta.
+50. `POST /api/ia/triagem/tarefas`: um clique transforma itens da triagem em tarefas, sem duplicar ao clicar de novo.
+51. Execuções da IA (uma, lote, desfazer, tarefas da triagem) auditadas, inclusive quando confirmaram faturamento.
+52. Tela da IA: botão "📝 Virar tarefas" na triagem, cartão mostra a tarefa com prazo e avisa a tela (`indycar:tarefas`) para recarregar a lista.
+
+## Automações
+53. Lead novo sem contato em 2 h notifica o responsável (sem dono: gestores); mensagem antiga não conta como contato; só olha os últimos 3 dias.
+54. Orçamento sem resposta em 3 dias vira tarefa do responsável; pula se o cliente respondeu, se já há tarefa aberta e espera 3 dias depois de concluída.
+55. Lead parado há 14 dias ganha sugestão de perdido com motivo (`crm_sugestao_perdido`), sem mudar nada; executar pede confirmação; não repete por 30 dias.
+56. Meta do mês em risco avisa gestores e admin uma vez por semana.
+57. Trava dupla (no processo e no banco, `crm_pegar_trava`) impede duas voltas ao mesmo tempo; testada no Postgres com bloco revertido.
+58. Erro numa regra não derruba as outras; cada volta vai para `crm_automacoes_execucoes`.
+59. Rota do agendador (`x-agendador-token`, comparação em tempo constante; 503 sem token configurado); gestor também roda pelo login; `GET /api/automacoes` sem vazar o token.
+
+## Segurança do servidor
+60. Cabeçalhos em toda resposta: CSP, X-Frame-Options, Referrer-Policy, Permissions-Policy, HSTS e COOP.
+61. CSP da página sem `unsafe-inline` em script: o hash de cada `<script>` embutido é calculado do próprio index.html (Chrome sem nenhum bloqueio em 1440 e 375 px).
+62. CORS só para os domínios do ecossistema; preflight de fora recebe 403.
+63. Corpo com conteúdo precisa ser JSON (415) e um objeto (400 para lista, número ou texto).
+64. Método HTTP desconhecido → 405.
+65. 40 tokens recusados pelo Auth no mesmo IP em 10 min → espera (sessão vencida não conta, porque a loja divide o IP).
+66. Erros internos sem detalhe do banco (catálogo, equipe, perfil, clientes, criação de usuário).
+67. Exportar CSV registrado por `POST /api/auditoria/exportacao` com filtros limpos; `GET /api/auditoria` só admin, com o nome de quem fez.
+68. Auditoria troca por "•••" qualquer campo com cara de segredo; integrações registram só os nomes dos campos.
+69. Integrações, investimento e catálogo auditados.
+70. `PATCH /api/perfil` aceita cargo, telefone, cor do avatar e preferências, validados; papel enviado ali é ignorado.
+71. `npm run segredos` varre arquivos versionados e novos (ignora valores de exemplo, confere `.env` fora do git); histórico do git limpo.
+72. `npm audit`: 0 vulnerabilidades; `npm run verificar` junta testes, segredos e audit.
+73. Migração `crm_automacoes_travas`: RLS ligado, `search_path` vazio, EXECUTE só para service role; advisor sem WARN novo.
+
+## Como foi verificado
+- `npm test`: 95 testes passando (inclui os da tela). Novos: `acesso`, `equipe`, `tarefas`, `automacoes` (relógio injetável), `ia-tarefas` (IA falsa) e `server` reescrito sobre `testes/servidor-falso.cjs`, que sobe o `server.js` real com o `db-supabase.js` real em banco de memória e uma pessoa de cada papel.
+- Servidor real local (porta 3110, `CRM_AUTOMACOES=0`): cabeçalhos, CSP, 401 com código, CORS, 415, agendador sem token; leitura real (com escrita bloqueada) de vendedores, desempenho, metas, rodízio simulado e tarefas.
+- Chrome (puppeteer-core): página com CSP sem erro; triagem → "Virar tarefas" no servidor falso da tela com a resposta da rota interceptada.
+- Banco: só a migração aditiva acima e um bloco `DO` revertido para testar a trava.
+
+
+## 
+## Rodada 3 (13/10/2026): login, perfil, acesso, equipe, tarefas e sino
+
+Tudo conferido no servidor falso (`npm run mock`, `/?papel=…`) com puppeteer-core + Chrome em 1440 e 375 px (19 roteiros, todos passando) e por `node --test` (96 testes no total).
+
+### Login
+1. Botão de mostrar/esconder senha (login, senha nova, troca de senha) com `aria-pressed` e rótulo que muda.
+2. Aviso de Caps Lock ligado nos campos de senha.
+3. "Lembrar meu e-mail neste aparelho" (só com a caixa marcada; a senha nunca é guardada).
+4. Mensagens claras: e-mail ou senha incorretos, usuário desativado, sem internet, muitas tentativas, e-mail não confirmado.
+5. Espera progressiva depois de 5 erros seguidos (30 s, 1 min, 2 min… até 15 min) com contagem no botão; continua valendo se recarregar a página.
+6. O campo de senha é limpo depois de entrar.
+7. "Esqueci a senha" com `resetPasswordForEmail` e volta para o próprio CRM (`redirectTo`).
+8. A resposta não revela se o e-mail tem conta.
+9. Aviso do limite de e-mails do plano gratuito e de que o administrador pode gerar uma senha temporária.
+10. Freio de 1 minuto entre pedidos de link e validação do e-mail antes de enviar.
+11. Volta pelo link (`PASSWORD_RECOVERY` ou `#type=recovery`) abre a tela de senha nova; o token sai da barra de endereço.
+12. Troca obrigatória quando `perfis.precisa_trocar_senha`: senha nova antes de abrir o CRM e o aviso é desligado no perfil.
+13. Regras da senha nova: 8 a 72 caracteres, as duas iguais, diferente do e-mail (e do nome antes do @) e sem senhas óbvias.
+14. As mesmas regras valem na troca de senha da Minha conta, com erros do Supabase em português.
+15. Duas etapas no login: se a conta tem autenticador, o CRM pede o código depois da senha (`getAuthenticatorAssuranceLevel`).
+16. O campo do código formata "000 000" e confere sozinho ao chegar em 6 números.
+17. Tela "Você não tem acesso ao CRM" com os links dos apps liberados para a pessoa (papel agenda só vê a Agenda).
+18. Perfil lido direto em `perfis` (RLS: a própria linha), com a rota do servidor de reserva.
+
+### Perfil e sessão
+19. Avatar com iniciais e cor no topo; menu com nome, e-mail, função e cargo.
+20. Menu do perfil por teclado (setas, Home/End; Esc fecha e devolve o foco) com `aria-haspopup`/`aria-expanded`.
+21. Itens do menu: meu perfil, trocar senha, duas etapas, notificações, minhas tarefas, tema, sair, sair de todos os aparelhos.
+22. Meu perfil: cargo, telefone (validado com DDD) e cor do avatar (8 cores, prévia na hora), gravados em `perfis` (cor em `perfis.avatar_cor`).
+23. Minha conta mostra os apps liberados e o último acesso.
+24. Duas etapas: ativar com QR e chave para digitar, confirmar com código, cancelar apaga o fator pela metade, desativar com aviso quando precisa entrar com o código.
+25. Preferências de notificação (aviso na tela, bipe, número na aba) salvas em `perfis.preferencias`, sem apagar chaves de outros apps.
+26. Sair e "Sair de todos os aparelhos" (`signOut({scope:'global'})`) com confirmação, também num cartão Sessão.
+27. Último acesso (`ultimo_acesso_em`/`ultimo_app`) gravado no máximo a cada 5 min, também quando a aba volta a ficar visível.
+28. Lista da equipe (Configurações) mostra "visto há…" e cor de cada pessoa.
+29. Funções gestor e agenda no cadastro e na troca de função.
+30. 401/403 tratados pelo `codigo` do servidor: sessão, desativado, sem acesso ao app, sem perfil, troca de senha, duas etapas; o resto vira mensagem.
+31. Token vencido: renova sozinho e repete o pedido uma vez, sem derrubar a pessoa.
+32. Desativado no meio do uso: fecha gaveta e diálogos, para o realtime, limpa o título e volta ao login com o aviso.
+33. Saída em outra aba ou aparelho (`SIGNED_OUT`) volta ao login.
+34. Vários pedidos falhando juntos geram um aviso só.
+
+### Sino de notificações
+35. Sino no topo com contador (até 99+), `aria-label` com as não lidas e número na aba do navegador.
+36. Realtime em `notificacoes` (inclui, atualiza, apaga) filtrado pela pessoa; confere a cada 2 min se o realtime cair e ao voltar para a aba.
+37. Notificação nova mostra aviso com "Abrir" e bipe opcional.
+38. Abrir marca como lida; `/?lead=` abre a ficha no próprio CRM; os outros apps abrem no app de origem.
+39. Link fora do ecossistema ou `javascript:` é ignorado; título e corpo sempre escapados.
+40. Marcar todas como lidas; apagar uma (volta se der erro).
+41. Ícone por tipo, tempo relativo e app de origem; no celular o painel ocupa a largura da tela.
+
+### Responsável do lead
+42. Coluna Responsável (avatar + primeiro nome, "Você") na lista, no padrão das colunas e no CSV.
+43. Filtro de responsável na lista (todos, meus, sem responsável, por pessoa), salvo no aparelho.
+44. "Meus leads" é o padrão do atendente na lista e no funil; gestor começa vendo todos.
+45. Funil com filtro próprio de responsável e avatar em cada cartão.
+46. Ficha: seletor de responsável e "Pegar para mim", com Desfazer.
+47. Ficha segue a regra do servidor: atendente só passa o lead dele ou pega lead sem dono (o resto fica travado com o motivo).
+48. Lote "Passar para…" (inclui tirar o responsável) só para gestor, com Desfazer que devolve cada lead a quem estava.
+49. Equipe lida de `/api/vendedores` (reserva: `/api/equipe/nomes` e `perfis`), sem o papel agenda.
+50. Tarefa criada na ficha vai, por padrão, para quem cuida do lead.
+
+### Equipe e metas (gestor/admin)
+51. Aba "Equipe e metas" só para gestor/admin; barrada também por atalho e por link.
+52. Meta da loja do mês: realizado, %, quanto falta e projeção pelo ritmo (do servidor; a tela calcula se faltar).
+53. Metas por pessoa em tabela editável (a loja na primeira linha), com o "feito" ao lado; grava `{mes, metas}` e relê.
+54. Ranking por faturamento, vendas, conversão, agendados, leads ou tempo de resposta (menor primeiro), em lista acessível e tabela.
+55. Período do ranking: mês escolhido, 30 dias ou 7 dias.
+56. Funil por responsável (pessoa × etapa + valor em aberto); clicar abre o funil daquela pessoa.
+57. Metas no Dashboard vêm do servidor ("Minha meta" e "Loja" lado a lado); "Definir metas" só aparece para o gestor e leva à aba da equipe.
+58. Barras de progresso com `aria-valuetext` ("R$ 4.520 de R$ 30.000, 15%").
+59. A tela entende os dois formatos de metas/desempenho (lista plana ou o do servidor, com `loja`/`pessoas`/`itens`).
+
+### Tarefas (tabela `tarefas`)
+60. Tarefas no banco, visíveis em qualquer aparelho, no lugar dos lembretes guardados só no navegador.
+61. Grupos: Atrasadas (destaque vermelho), Agenda de hoje (por hora), Próximas, Sem data e Feitas agora.
+62. Criar com dia, hora (sem hora vence às 17h30), prioridade e para quem.
+63. Concluir, reabrir e cancelar com Desfazer; cancelar só para quem criou ou gestor.
+64. Filtros Minhas / Que passei / Equipe (gestor).
+65. Selo no Dashboard com as atrasadas e as de hoje.
+66. Realtime das tarefas atribuídas a mim (aparecem sem recarregar).
+67. Aba Tarefas na ficha do lead (ligada ao lead e ao cliente) com contador das abertas.
+68. Quatro tarefas rápidas na ficha: ligar hoje, cobrar orçamento, confirmar horário e pós-venda em 3 dias.
+69. Lembretes antigos do aparelho oferecidos para importar uma vez (com cópia de segurança); "Agora não" vale até fechar a aba.
+70. Tarefa vinda de outro app mostra a origem; atalhos G T (tarefas) e G E (equipe).
+
+### Segurança, visual e PWA
+71. "Excluir" só para gestor/admin; o 403 vira mensagem sem derrubar a sessão.
+72. Biblioteca supabase-js fixada na versão 2.112.0.
+73. Nada de `onclick` inline (compatível com a CSP do servidor).
+74. Topo responsivo em 375 px (busca em linha própria, sino e avatar alinhados) e selo da navegação sem cobrir o ícone.
+75. Componentes novos no tema claro e no escuro, só com as variáveis da casa e movimento reduzido respeitado.
+76. Service worker v5 com `acesso.js` e `equipe.js`.
+
+### Servidor falso e testes
+77. Mock com 9 papéis via `/?papel=` (vira cookie): admin, gestor, atendente, agenda, desativado, sem_app, trocar_senha, mfa, deslogado.
+78. Supabase falso no navegador (`scripts/mock-supabase.js`): senha, recuperação, MFA TOTP, sair local/global, `from()` com filtros e realtime por SSE.
+79. Portão do mock igual ao servidor: 401 sem token, token vencido, desativado, sem acesso ao app e troca de senha, sempre com `codigo`.
+80. Rotas novas no formato do servidor real: `/api/vendedores`, `/api/equipe/nomes`, responsável (com as regras de quem pode), lote, metas e desempenho; `/api/tarefas`.
+81. "RLS" falsa: notificações só minhas, tarefas da equipe, perfil só o meu e sem mudar papel/apps/ativo.
+82. Ganchos de teste `POST /__mock/notificar` e `/__mock/tarefa` para o realtime.
+83. Testes novos: `testes/utils-rodada3.test.cjs` (10) e `testes/mock-rodada3.test.mjs` (8); `mock.test.mjs` passou a mandar o token.
+
