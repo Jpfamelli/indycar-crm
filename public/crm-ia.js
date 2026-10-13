@@ -77,15 +77,19 @@
     cobrar_orcamento: { ico: '🧾', nome: 'Cobrar orçamento', botao: 'Copiar e abrir conversa' },
     marcar_perdido: { ico: '🏳️', nome: 'Marcar perdido', botao: 'Marcar como perdido' },
     mover_status: { ico: '➡️', nome: 'Mudar etapa', botao: 'Mudar etapa' },
+    criar_tarefa: { ico: '📝', nome: 'Criar tarefa', botao: 'Criar a tarefa' },
     aguardar: { ico: '⏳', nome: 'Aguardar', botao: 'Ok, aguardar' },
   };
   const ETAPA = { novo: 'Novo', contato: 'Em contato', orcamento: 'Orçamento', agendado: 'Agendado', em_servico: 'Em serviço', concluido: 'Concluído', perdido: 'Perdido' };
-  const TIPO = { crm_proxima_acao: 'Próxima ação', crm_qualificacao: 'Qualificação', crm_preencher: 'Preencher', crm_triagem: 'Triagem', crm_pergunta: 'Pergunta', crm_resumo: 'Resumo' };
+  const TIPO = { crm_proxima_acao: 'Próxima ação', crm_qualificacao: 'Qualificação', crm_preencher: 'Preencher', crm_triagem: 'Triagem', crm_pergunta: 'Pergunta', crm_resumo: 'Resumo', crm_sugestao_perdido: 'Sugestão de perdido' };
   const STATUS = { proposta: 'Esperando você', executada: 'Feita', recusada: 'Recusada', erro: 'Erro', desfeita: 'Desfeita' };
   const CAMPO = { carro_modelo: 'Carro', carro_ano: 'Ano', placa: 'Placa', servico: 'Serviço', origem: 'Origem' };
   const ORIGEM = { meta: 'Instagram/Facebook', google: 'Google', indicacao: 'Indicação', organico: 'Orgânico', whatsapp: 'WhatsApp', passagem: 'Passagem', telefone: 'Telefone' };
   const valorCampo = (c, v) => c === 'origem' ? (ORIGEM[v] || v) : v;
-  const REGRA = { parado: 'Parado', orcamento_sem_resposta: 'Orçamento sem resposta', servico_velho: 'Em serviço há muito tempo', agendado_velho: 'Agendado sem novidade' };
+  const REGRA = { parado: 'Parado', orcamento_sem_resposta: 'Orçamento sem resposta', servico_velho: 'Em serviço há muito tempo', agendado_velho: 'Agendado sem novidade', parado_14d: 'Parado há 14+ dias' };
+  /** Avisa a tela que as tarefas mudaram (a lista "Minhas tarefas" recarrega). */
+  const avisarTarefas = () => { try { window.dispatchEvent(new CustomEvent('indycar:tarefas')); } catch { /* navegador antigo */ } };
+  const prazoTxt = h => { const n = Number(h) || 24; return n < 24 ? `em ${n} h` : `em ${Math.round(n / 24)} dia${Math.round(n / 24) > 1 ? 's' : ''}`; };
   const nomeAcao = a => a.acao === 'mover_status' ? `Mover para ${ETAPA[a.novo_status] || a.novo_status}` : (ACAO[a.acao]?.nome || a.acao);
   const fat = a => !!a?.plano?.faturamento;
 
@@ -116,10 +120,11 @@
         if (!ok) { carregando(btn, false); return null; }
         r = await post(`/api/ia/acoes/${encodeURIComponent(id)}/executar`, { confirmarFaturamento: true });
       }
+      if (r.tarefa) { toast(`Tarefa criada: ${r.tarefa.titulo}`); avisarTarefas(); }
       if (r.texto) toast((await copiar(r.texto)) ? 'Texto copiado. Cole na conversa.' : 'Não consegui copiar; selecione o texto.');
       if (r.abrir) abrirLink(r.abrir);
       if (r.mudou) { toast('Feito pela IA. Dá para desfazer no histórico.'); try { await IC().recarregarLeads?.(); } catch { /* tela recarrega depois */ } }
-      else if (!r.texto && !r.abrir) toast('Marcado como feito.');
+      else if (!r.texto && !r.abrir && !r.tarefa) toast('Marcado como feito.');
       return r;
     } catch (e) { toast(e.message); carregando(btn, false); return null; }
   }
@@ -130,7 +135,7 @@
   }
   async function desfazer(id, btn) {
     carregando(btn, true, 'Desfazendo…');
-    try { await post(`/api/ia/acoes/${encodeURIComponent(id)}/desfazer`); toast('Desfeito.'); try { await IC().recarregarLeads?.(); } catch { /* ok */ } return true; }
+    try { const r = await post(`/api/ia/acoes/${encodeURIComponent(id)}/desfazer`); toast(r?.tarefaCancelada ? 'Tarefa cancelada.' : 'Desfeito.'); if (r?.tarefaCancelada) avisarTarefas(); try { await IC().recarregarLeads?.(); } catch { /* ok */ } return true; }
     catch (e) { toast(e.message); carregando(btn, false); return false; }
   }
 
@@ -187,6 +192,7 @@
       <header><span class="cia-ico" aria-hidden="true">${a.ico}</span><b>${esc(nomeAcao(p))}</b><span class="cia-prio p-${esc(p.prioridade)}">${esc(p.prioridade || '')}</span></header>
       <p class="cia-just">${esc(p.justificativa || '')}</p>
       ${p.motivo_perda ? `<p class="cia-just">Motivo: ${esc(p.motivo_perda)}</p>` : ''}
+      ${p.tarefa ? `<p class="cia-tarefa"><span aria-hidden="true">📝</span> ${esc(p.tarefa.titulo)} <small>${esc(prazoTxt(p.tarefa.prazo_horas))}</small></p>` : ''}
       ${p.texto_mensagem ? `<blockquote class="cia-texto" data-texto>${esc(p.texto_mensagem)}</blockquote>` : ''}
       ${avisos.map(x => `<p class="cia-aviso">${esc(x)}</p>`).join('')}
       <div class="cia-acoes">${botoes}</div>
@@ -324,7 +330,7 @@
         <label class="cia-dias">parado há <select data-dias aria-label="Dias parado"><option value="3">3+ dias</option><option value="7">7+ dias</option><option value="15">15+ dias</option></select></label>
         <button type="button" class="cia-btn cia-btn-forte" data-rodar>Rodar triagem</button></div>
       <p class="cia-dica" data-tri-info>A IA olha os leads parados e sugere o que fazer com cada um. Nada muda sem o seu clique.</p>
-      <div class="cia-lote" data-lote hidden><label><input type="checkbox" data-todos /> Todas</label><button type="button" class="cia-btn" data-exec-lote>Executar selecionadas (<span data-nsel>0</span>)</button></div>
+      <div class="cia-lote" data-lote hidden><label><input type="checkbox" data-todos /> Todas</label><button type="button" class="cia-btn" data-exec-lote>Executar selecionadas (<span data-nsel>0</span>)</button><button type="button" class="cia-btn" data-tarefas-lote title="Vira tarefa para o responsável de cada lead">📝 Virar tarefas</button></div>
       <ul class="cia-lista cia-tri" data-tri></ul>
     </section>`;
   }
@@ -338,6 +344,7 @@
           <span class="cia-prio p-${esc(p.prioridade)}">${esc(p.prioridade || '')}</span></div>
         <p><span aria-hidden="true">${(ACAO[p.acao] || {}).ico || '✨'}</span> <b>${esc(nomeAcao(p))}</b>${fat(p) ? ' <span class="cia-fat" title="Mexe em faturamento">R$</span>' : ''} — ${esc(p.justificativa || '')}</p>
         ${p.texto_mensagem ? `<details><summary>Texto pronto</summary><blockquote class="cia-texto" data-texto>${esc(p.texto_mensagem)}</blockquote></details>` : ''}
+        ${p.tarefa_id ? `<p class="cia-tarefa" data-tem-tarefa><span aria-hidden="true">📝</span> ${p.tarefa_automatica ? 'A IA já criou a tarefa' : 'Tarefa criada'}</p>` : ''}
       </div>
       <div class="cia-acoes">${prop ? (sugerir() ? '' : `<button type="button" class="cia-btn sm cia-btn-forte" data-exec="${esc(it.id)}">${esc((ACAO[p.acao] || {}).botao || 'Executar')}</button><button type="button" class="cia-btn sm" data-recusar="${esc(it.id)}">Recusar</button>`) : `<span class="cia-pilula s-${esc(it.status)}">${esc(STATUS[it.status] || it.status)}</span>`}</div>
     </li>`;
@@ -351,6 +358,7 @@
       const n = raiz.querySelectorAll('[data-sel]:checked').length;
       $('[data-nsel]', raiz).textContent = n;
       $('[data-exec-lote]', raiz).disabled = !n;
+      $('[data-tarefas-lote]', raiz).disabled = !n;
       lote.hidden = !raiz.querySelector('[data-sel]');
     };
     const pintar = itens => {
@@ -400,6 +408,22 @@
             : (r.itens?.length ? 'Estas sugestões ainda esperam você.' : 'Nenhum lead parado. 🎉');
         } catch (e) { toast(e.message); }
         finally { carregando(b, false); }
+        return;
+      }
+      if (b.hasAttribute('data-tarefas-lote')) {
+        const ids = [...raiz.querySelectorAll('[data-sel]:checked')].map(c => c.dataset.sel);
+        if (!ids.length) return;
+        carregando(b, true, 'Criando…');
+        try {
+          const r = await post('/api/ia/triagem/tarefas', { ids });
+          for (const x of r.itens || []) {
+            const li = raiz.querySelector(`[data-card="${CSS.escape(x.id)}"] .cia-tri-corpo`);
+            if (li && !li.querySelector('[data-tem-tarefa]')) li.insertAdjacentHTML('beforeend', `<p class="cia-tarefa" data-tem-tarefa><span aria-hidden="true">📝</span> ${x.tarefa ? 'Tarefa criada' : x.motivo === 'lead_com_tarefa_aberta' ? 'Já tinha tarefa aberta' : x.motivo === 'ja_tem_tarefa' ? 'Tarefa já criada' : 'Sem tarefa'}</p>`);
+          }
+          toast(`${r.criadas} tarefa${r.criadas === 1 ? '' : 's'} criada${r.criadas === 1 ? '' : 's'}${r.puladas ? `, ${r.puladas} pulada${r.puladas === 1 ? '' : 's'}` : ''}.`);
+          if (r.criadas) avisarTarefas();
+        } catch (e) { toast(e.message); }
+        finally { carregando(b, false); atualizarLote(); }
         return;
       }
       if (b.hasAttribute('data-exec-lote')) {

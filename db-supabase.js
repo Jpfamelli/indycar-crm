@@ -78,6 +78,8 @@ async function createLead(data = {}) {
   row.status = STATUSES.includes(data.status) ? data.status : 'novo';
   row.origem = ORIGENS.includes(data.origem)  ? data.origem : 'organico';
   if (data.created_at) row.created_at = data.created_at;
+  // responsável: o servidor já validou (uuid de alguém da equipe do CRM ou null)
+  if (data.responsavel_id !== undefined) row.responsavel_id = data.responsavel_id;
   // closed_at e cliente_id são preenchidos pelos gatilhos do Postgres
 
   const { data: novo, error } = await sb.from('leads').insert(row).select().single();
@@ -91,12 +93,25 @@ async function getLead(id) {
   return normalizarLead(data);
 }
 
-async function listLeads({ status, origem, q } = {}) {
-  let query = sb.from('leads').select('*').order('created_at', { ascending: false });
-  if (status && STATUSES.includes(status)) query = query.eq('status', status);
-  if (origem && ORIGENS.includes(origem))  query = query.eq('origem', origem);
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-  const { data, error } = await query;
+async function listLeads({ status, origem, q, responsavel } = {}) {
+  // de 1000 em 1000: o Supabase corta cada consulta em 1000 linhas
+  const filtrar = query => {
+    if (status && STATUSES.includes(status)) query = query.eq('status', status);
+    if (origem && ORIGENS.includes(origem))  query = query.eq('origem', origem);
+    if (responsavel === 'nenhum') query = query.is('responsavel_id', null);
+    else if (responsavel && UUID_RE.test(responsavel)) query = query.eq('responsavel_id', responsavel);
+    return query;
+  };
+  const data = [];
+  let error = null;
+  for (let i = 0; i < 20000; i += 1000) {
+    const r = await filtrar(sb.from('leads').select('*')).order('created_at', { ascending: false }).range(i, i + 999);
+    if (r.error) { error = r.error; break; }
+    data.push(...(r.data || []));
+    if (!r.data || r.data.length < 1000) break;
+  }
   erro('listLeads', error);
   const rows = (data || []).map(normalizarLead);
 
@@ -182,9 +197,14 @@ function statsDe(rows, sinceISO) {
 }
 
 async function todosOsLeads() {
-  const { data, error } = await sb.from('leads').select('*').order('created_at', { ascending: false });
-  erro('todosOsLeads', error);
-  return (data || []).map(normalizarLead);
+  const out = [];
+  for (let i = 0; i < 20000; i += 1000) {
+    const { data, error } = await sb.from('leads').select('*').order('created_at', { ascending: false }).range(i, i + 999);
+    erro('todosOsLeads', error);
+    out.push(...(data || []));
+    if (!data || data.length < 1000) break;
+  }
+  return out.map(normalizarLead);
 }
 
 async function getStats() {

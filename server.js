@@ -33,7 +33,15 @@ const USA_SUPABASE = process.env.CRM_DB !== 'sqlite'
 
 const store = USA_SUPABASE ? require('./db-supabase') : require('./db');
 const { gerarResumoSemanal, montarBriefing } = require('./ia');
-const { criarIACrm, ErroIA } = require('./lib/ia-crm');
+const { criarIACrm, ErroIA, planoAcao } = require('./lib/ia-crm');
+const { criarAcesso } = require('./lib/acesso');
+const { criarAuditoria } = require('./lib/auditoria');
+const { criarEquipe } = require('./lib/equipe-crm');
+const { criarTarefas } = require('./lib/tarefas');
+const { criarAutomacoes } = require('./lib/automacoes');
+const { rotasR3 } = require('./lib/rotas');
+const SEG = require('./lib/seguranca');
+const U = require('./lib/util-servidor');
 
 const PORT = process.env.PORT || 3100;
 const PUBLIC = path.join(__dirname, 'public');
@@ -55,6 +63,13 @@ const json = (res, code, data) => {
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
+    // corpo com conteúdo tem de ser JSON (formulário de outro site não passa)
+    const tipo = String(req.headers['content-type'] || '');
+    const temCorpo = Number(req.headers['content-length'] || 0) > 0 || !!req.headers['transfer-encoding'];
+    if (temCorpo && !/^application\/json(\s*;|$)/i.test(tipo.trim())) {
+      req.resume();
+      return reject(Object.assign(new Error('Envie o corpo como JSON (Content-Type: application/json).'), { status: 415 }));
+    }
     let raw = '', bytes = 0, excedeu = false;
     req.on('data', c => {
       bytes += c.length;
@@ -64,7 +79,11 @@ function readBody(req) {
     req.on('end', () => {
       if (excedeu) return reject(Object.assign(new Error('Corpo maior que 64 KB.'), { status: 413 }));
       if (!raw) return resolve({});
-      try { resolve(JSON.parse(raw)); } catch { reject(Object.assign(new Error('JSON inválido'), {status:400})); }
+      let v;
+      try { v = JSON.parse(raw); } catch { return reject(Object.assign(new Error('JSON inválido'), {status:400})); }
+      // sempre um objeto: lista, número ou texto soltos não chegam às rotas
+      if (!v || typeof v !== 'object' || Array.isArray(v)) return reject(Object.assign(new Error('O corpo precisa ser um objeto JSON.'), { status: 400 }));
+      resolve(v);
     });
     req.on('error', reject);
   });
@@ -77,7 +96,11 @@ function serveStatic(res, urlPath) {
   if (!file.startsWith(PUBLIC + path.sep)) { res.writeHead(403).end('Proibido'); return; }
   fs.readFile(file, (err, buf) => {
     if (err) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('Não encontrado'); return; }
-    res.writeHead(200, { 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-cache', 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
+    const ext = path.extname(file);
+    const cab = { 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-cache', 'Content-Type': MIME[ext] || 'application/octet-stream' };
+    // a página ganha a CSP com o hash dos scripts embutidos (a API fica com default-src 'none')
+    if (ext === '.html') cab['Content-Security-Policy'] = SEG.cspPagina({ hashes: SEG.hashesScripts(buf.toString('utf8')), supabaseUrl: SUPABASE_URL });
+    res.writeHead(200, cab);
     res.end(buf);
   });
 }
@@ -92,8 +115,6 @@ function serveStatic(res, urlPath) {
 const SUPABASE_URL      = process.env.SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
 const SERVICE_KEY       = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || '';
-
-const CACHE_LOGIN = new Map();   // token -> { usuario, expira } | { negado, expira }
 
 /* Cliente com poderes de servidor (ignora RLS). Precisamos dele para mexer em
    perfis, equipe e catálogo — coisas que a tela nunca pode fazer sozinha.
@@ -119,76 +140,36 @@ function texto1(v, max) {
 const ehUuid = v =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v ?? ''));
 
-/* Freio simples por usuário: um token válido (ou um script distraído) não
-   pode criar mil contas nem martelar o banco em segundos. */
-const USO = new Map();   // chave -> { qtd, zeraEm }
+/* Freio por pessoa/IP (lib/seguranca): limpa sozinho as chaves vencidas. */
+const FREIO = SEG.criarFreio();
+const dentroDoLimite = (chave, teto, janelaMs) => FREIO.dentro(chave, teto, janelaMs);
 
-function dentroDoLimite(chave, teto, janelaMs) {
-  const agora = Date.now();
-  const atual = USO.get(chave);
-  if (!atual || atual.zeraEm <= agora) {
-    if (USO.size > 500) USO.clear();
-    USO.set(chave, { qtd: 1, zeraEm: agora + janelaMs });
-    return true;
-  }
-  if (atual.qtd >= teto) return false;
-  atual.qtd++;
-  return true;
+/* Porteiro (lib/acesso): token válido + perfil ativo + papel da equipe +
+   'crm' em perfis.apps (admin sempre). 401/403 com codigo. Grava o último
+   acesso no máximo a cada 5 min. */
+let ACESSO = null;
+function acesso() {
+  if (!ACESSO) ACESSO = criarAcesso({ supabaseUrl: SUPABASE_URL, anonKey: SUPABASE_ANON_KEY, sb: adminSupabase(), fetch, log: (...a) => console.warn('[acesso]', ...a) });
+  return ACESSO;
 }
 
-function validadeDoToken(token) {
-  try {
-    const [, carga] = token.split('.');
-    const { exp } = JSON.parse(Buffer.from(carga, 'base64url').toString('utf8'));
-    return Number.isFinite(exp) ? exp * 1000 : 0;
-  } catch { return 0; }
+/* Auditoria, equipe, tarefas e automações (só no banco compartilhado). */
+let AUDITAR = null, EQUIPE = null, TAREFAS = null, AUTOMACOES = null;
+const auditar = (...a) => { if (!AUDITAR) AUDITAR = criarAuditoria({ sb: USA_SUPABASE ? adminSupabase() : null, log: (...x) => console.warn('[auditoria]', ...x) }); return AUDITAR(...a); };
+function equipe() { if (!EQUIPE && USA_SUPABASE && adminSupabase()) EQUIPE = criarEquipe({ sb: adminSupabase(), auditar, log: (...a) => console.warn('[equipe]', ...a) }); return EQUIPE; }
+function tarefas() { if (!TAREFAS && USA_SUPABASE && adminSupabase()) TAREFAS = criarTarefas({ sb: adminSupabase(), auditar }); return TAREFAS; }
+function automacoes() {
+  if (!AUTOMACOES && USA_SUPABASE && adminSupabase()) AUTOMACOES = criarAutomacoes({ sb: adminSupabase(), equipe: equipe(), tarefas: tarefas(), auditar, planoAcao,
+    opcoes: { rodizio: process.env.CRM_RODIZIO !== '0' }, log: (...a) => console.warn('[automações]', ...a) });
+  return AUTOMACOES;
 }
-
-async function usuarioLogado(req) {
-  const auth = req.headers['authorization'] || '';
-  const m = /^\s*bearer\s+(\S+)\s*$/i.exec(auth);       // "Bearer" é case-insensitive
-  const token = m ? m[1] : null;
-  if (!token || !SUPABASE_URL || !SUPABASE_ANON_KEY || !SERVICE_KEY) return null;
-
-  const lembrado = CACHE_LOGIN.get(token);
-  if (lembrado && lembrado.expira > Date.now()) return lembrado.negado ? null : lembrado.usuario;
-
-  const vence = validadeDoToken(token);
-  if (vence && vence <= Date.now()) return null;        // já venceu: nem pergunta
-
-  const negar = () => {
-    if (CACHE_LOGIN.size > 500) CACHE_LOGIN.clear();
-    CACHE_LOGIN.set(token, { negado: true, expira: Date.now() + 30_000 });
-    return null;
-  };
-
-  try {
-    const r = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-      headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!r.ok) return negar();
-    const usuario = await r.json();
-    if (!usuario?.id) return negar();
-
-    // o perfil precisa existir e estar ativo (atendente desligado perde o acesso)
-    const p = await fetch(
-      `${SUPABASE_URL}/rest/v1/perfis?select=ativo,papel&id=eq.${encodeURIComponent(usuario.id)}`,
-      { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
-        signal: AbortSignal.timeout(8000) });
-    if (!p.ok) return negar();
-    const [perfil] = await p.json();
-    if (!perfil?.ativo) return negar();
-    /* Papel 'agenda' (ex.: Franklin): só marca presença na Agenda. No CRM ele
-       não entra — nada de métricas, leads nem ficha de cliente. */
-    if (perfil.papel === 'agenda') return negar();
-    usuario.papel = perfil.papel;
-
-    if (CACHE_LOGIN.size > 500) CACHE_LOGIN.clear();
-    CACHE_LOGIN.set(token, { usuario, expira: Math.min(Date.now() + 60_000, vence || Infinity) });
-    return usuario;
-  } catch { return null; }
-}
+const AUTOMACOES_LIGADAS = process.env.CRM_AUTOMACOES !== '0';
+const INTERVALO_MIN = Math.max(5, Math.min(240, Number(process.env.CRM_AUTOMACOES_MIN) || 15));
+const TOKEN_AGENDADOR = process.env.CRM_AGENDADOR_TOKEN || '';
+/* Na nuvem o IP verdadeiro vem do proxy do Render (x-forwarded-for). */
+const ATRAS_DE_PROXY = !!process.env.RENDER || process.env.CRM_ATRAS_DE_PROXY === '1';
+const CORS_OK = SEG.origensPermitidas({ extra: process.env.CRM_CORS_EXTRA, local: !process.env.RENDER });
+const ipDe = req => SEG.ipDe(req, { atrasDeProxy: ATRAS_DE_PROXY });
 
 /* ------------------------------------------------------------
    IA DO CRM — criada sob demanda (precisa do banco compartilhado)
@@ -199,7 +180,7 @@ function iaCrm() {
   if (!IA_CRM) {
     const sb = adminSupabase();
     if (!sb) return null;
-    IA_CRM = criarIACrm({ sb, store, log: (...a) => console.warn('[ia-crm]', ...a) });
+    IA_CRM = criarIACrm({ sb, store, tarefas: tarefas(), log: (...a) => console.warn('[ia-crm]', ...a) });
   }
   return IA_CRM;
 }
@@ -322,9 +303,16 @@ const server = http.createServer(async (req, res) => {
     try { url = new URL(req.url, `http://${req.headers.host || 'localhost'}`); }
     catch { return json(res, 400, { erro: 'requisição malformada' }); }
     const { pathname } = url;
+    SEG.aplicarCabecalhos(res, { https: NA_NUVEM });
 
     // ---------- API ----------
     if (pathname.startsWith('/api/')) {
+      if (SEG.tratarCors(req, res, CORS_OK)) return;
+      const ip = ipDe(req);
+      // freio geral por IP e bloqueio de quem erra o login sem parar
+      if (!dentroDoLimite(`ip:${ip}`, 3000, 300_000)) return json(res, 429, { erro: 'Muitos pedidos deste endereço. Espere alguns minutos.', codigo: 'limite' });
+      if (FREIO.estourou(`login-falhou:${ip}`, 40)) return json(res, 429, { erro: 'Muitas tentativas sem login válido. Espere alguns minutos.', codigo: 'limite' });
+      if (!['GET', 'HEAD', 'POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method)) return json(res, 405, { erro: 'método não permitido' });
 
       // A tela precisa saber onde fica o Supabase para montar o login.
       // A chave publicável é pública por design.
@@ -355,7 +343,6 @@ const server = http.createServer(async (req, res) => {
         if (!sb) return json(res, 503, { erro: 'Servidor sem a chave do banco configurada.' });
 
         // Ninguém precisa estar logado para chegar aqui, então o freio é o IP
-        const ip = req.socket?.remoteAddress || 'desconhecido';
         if (!dentroDoLimite(`primeiro:${ip}`, 5, 600_000)) {
           return json(res, 429, { erro: 'Muitas tentativas. Espere alguns minutos.' });
         }
@@ -389,22 +376,44 @@ const server = http.createServer(async (req, res) => {
           const jaExiste = /already been registered|already exists/i.test(error.message);
           return json(res, jaExiste ? 409 : 400, {
             erro: jaExiste ? 'Já existe uma conta com esse e-mail. Tente entrar por ela.'
-                           : error.message });
+                           : 'Não consegui criar a conta. Confira o e-mail e a senha.' });
         }
 
         /* O gatilho do banco já marca o primeiro cadastro como admin. Reforçado
            aqui porque uma corrida entre dois cadastros simultâneos poderia
            deixar o dono como atendente no próprio sistema. */
         await sb.from('perfis').update({ nome, papel: 'admin', ativo: true }).eq('id', data.user.id);
+        await auditar({ id: data.user.id }, 'primeiro_acesso', { tabela: 'perfis', registro: data.user.id, detalhes: { email } });
         return json(res, 201, { ok: true, email });
       }
 
-      // Daqui para baixo, só com login válido.
-      const quem = await usuarioLogado(req);
-      if (!quem) {
-        return json(res, 401, { erro: 'Faça login para usar o CRM.' });
+      /* Agendador externo (o Render gratuito dorme): POST /api/automacoes/rodar
+         com o cabeçalho x-agendador-token = CRM_AGENDADOR_TOKEN. Sem login. */
+      if (pathname === '/api/automacoes/rodar' && req.method === 'POST' && req.headers['x-agendador-token'] !== undefined) {
+        if (!TOKEN_AGENDADOR) return json(res, 503, { erro: 'Agendador não configurado (CRM_AGENDADOR_TOKEN).' });
+        if (!SEG.segredoConfere(req.headers['x-agendador-token'], TOKEN_AGENDADOR)) {
+          FREIO.contar(`login-falhou:${ip}`, 40, 600_000);
+          return json(res, 401, { erro: 'Token do agendador inválido.', codigo: 'agendador_invalido' });
+        }
+        const a = automacoes();
+        if (!a) return json(res, 503, { erro: 'Automações só com o banco compartilhado.' });
+        if (!dentroDoLimite('agendador', 12, 600_000)) return json(res, 429, { erro: 'O agendador está chamando rápido demais.' });
+        const b = await readBody(req);
+        const r = await a.ciclo({ origem: 'agendador', regras: b.regras });
+        return json(res, r.ocupado ? 409 : 200, r);
       }
+
+      // Daqui para baixo, só com login válido (papel da equipe + 'crm' nos apps).
+      const porta = await acesso().autenticar(req);
+      if (!porta.ok) {
+        // só token recusado pelo Auth conta (sessão vencida é normal e a loja divide o mesmo IP)
+        if (porta.codigo === 'sessao_invalida') FREIO.contar(`login-falhou:${ip}`, 40, 600_000);
+        return json(res, porta.status, { erro: porta.erro, codigo: porta.codigo, ...(porta.apps ? { apps: porta.apps } : {}) });
+      }
+      const quem = porta.usuario;
       const ehAdmin = quem.papel === 'admin';
+      const ehGestor = U.ehGestor(quem.papel);
+      if (!dentroDoLimite(`pessoa:${quem.id}`, 900, 300_000)) return json(res, 429, { erro: 'Muitos pedidos seguidos. Espere um pouco.', codigo: 'limite' });
       if (pathname === '/api/saude' && req.method === 'GET') {
         const sb = adminSupabase();
         if (!sb) return json(res, 503, {erro:'Saúde indisponível.'});
@@ -416,6 +425,13 @@ const server = http.createServer(async (req, res) => {
         return json(res,200,{avisos:(data || []).filter(x => x.problema).map(x => ({problema:texto1(x.problema,240),desde:x.desde})), ia});
       }
       if (req.method !== 'GET') statsCache = null;
+
+      /* Rodada 3: eu, vendedores, responsável, rodízio, desempenho, metas,
+         tarefas, automações, auditoria, equipe (apps / recebe leads / senha). */
+      if (await rotasR3({ req, res, url, pathname, quem, json, lerCorpo: () => readBody(req), freio: FREIO, auditar,
+        acesso: acesso(), equipe: equipe(), tarefas: tarefas(), automacoes: automacoes(), sb: USA_SUPABASE ? adminSupabase() : null,
+        automacoesLigadas: AUTOMACOES_LIGADAS && USA_SUPABASE, intervaloMin: INTERVALO_MIN, tokenAgendador: !!TOKEN_AGENDADOR,
+        limparStats: () => { statsCache = null; } })) return;
 
       /* ============================================================
          IA DO CRM — /api/ia/*  (login exigido acima; toda ação em ia_acoes)
@@ -463,6 +479,12 @@ const server = http.createServer(async (req, res) => {
             if (typeof b.pergunta !== 'string') return json(res, 400, { erro: 'Escreva a pergunta.' });
             return json(res, 200, await ia.perguntar(b.pergunta, quem));
           }
+          if (pathname === '/api/ia/triagem/tarefas' && req.method === 'POST') {
+            const b = await readBody(req);
+            const r = await ia.tarefasDaTriagem(b.ids, quem);
+            if (r.criadas) await auditar(quem, 'ia_tarefas_triagem', { tabela: 'tarefas', detalhes: { criadas: r.criadas } });
+            return json(res, 200, r);
+          }
           if (pathname === '/api/ia/acoes/executar-lote' && req.method === 'POST') {
             const b = await readBody(req);
             const ids = Array.isArray(b.ids) ? [...new Set(b.ids.filter(ehUuid))] : [];
@@ -472,6 +494,7 @@ const server = http.createServer(async (req, res) => {
               try { resultados.push({ id, ...(await ia.executar(id, quem, { confirmarFaturamento: b.confirmarFaturamento === true })) }); }
               catch (e) { resultados.push({ id, ok: false, erro: e.message, status: e.status || 500, precisaConfirmar: !!e.precisaConfirmar }); }
             }
+            await auditar(quem, 'ia_executar_lote', { tabela: 'ia_acoes', detalhes: { ok: resultados.filter(r => r.ok).map(r => r.id), falhas: resultados.filter(r => !r.ok).length, confirmouFaturamento: b.confirmarFaturamento === true } });
             return json(res, 200, { resultados, ok: resultados.filter(r => r.ok).length, falhas: resultados.filter(r => !r.ok).length });
           }
           const ma = pathname.match(/^\/api\/ia\/acoes\/([^/]+)\/(executar|recusar|desfazer)$/);
@@ -479,14 +502,20 @@ const server = http.createServer(async (req, res) => {
             const [, id, oque] = ma;
             if (!ehUuid(id)) return json(res, 400, { erro: 'Ação inválida.' });
             const b = await readBody(req);
-            if (oque === 'executar') return json(res, 200, await ia.executar(id, quem, { confirmarFaturamento: b.confirmarFaturamento === true }));
+            if (oque === 'executar') {
+              const r = await ia.executar(id, quem, { confirmarFaturamento: b.confirmarFaturamento === true });
+              await auditar(quem, 'ia_executar', { tabela: 'ia_acoes', registro: id, detalhes: { mudou: r.mudou, tarefa: r.tarefa?.id || null, confirmouFaturamento: b.confirmarFaturamento === true } });
+              return json(res, 200, r);
+            }
             if (oque === 'recusar') return json(res, 200, await ia.recusar(id, quem, b.motivo));
             // desfazer: quem executou, ou admin/gestor
-            if (!['admin', 'gestor'].includes(quem.papel)) {
+            if (!ehGestor) {
               const dono = await ia.donoDaAcao(id);
               if (dono && dono !== quem.id) return json(res, 403, { erro: 'Só quem executou (ou um gestor) pode desfazer.' });
             }
-            return json(res, 200, await ia.desfazer(id, quem));
+            const r = await ia.desfazer(id, quem);
+            await auditar(quem, 'ia_desfazer', { tabela: 'ia_acoes', registro: id });
+            return json(res, 200, r);
           }
           return json(res, 404, { erro: 'rota da IA não encontrada' });
         } catch (e) { return erroIA(res, e); }
@@ -494,10 +523,16 @@ const server = http.createServer(async (req, res) => {
 
       // GET /api/leads?status=&origem=&q=
       if (pathname === '/api/leads' && req.method === 'GET') {
+        // responsável: ?minhas=1 | ?responsavel=eu|nenhum|<uuid>
+        let responsavel = url.searchParams.get('responsavel') || undefined;
+        if (url.searchParams.get('minhas') === '1' || responsavel === 'eu') responsavel = quem.id;
+        if (responsavel && responsavel !== 'nenhum' && !U.ehUuid(responsavel)) return json(res, 400, { erro: 'Responsável inválido.' });
+        const q = url.searchParams.get('q') || undefined;
+        if (q && q.length > 120) return json(res, 400, { erro: 'Busca longa demais.' });
         return json(res, 200, await store.listLeads({
           status: url.searchParams.get('status') || undefined,
           origem: url.searchParams.get('origem') || undefined,
-          q: url.searchParams.get('q') || undefined,
+          q, responsavel,
         }));
       }
 
@@ -505,7 +540,19 @@ const server = http.createServer(async (req, res) => {
       if (pathname === '/api/leads' && req.method === 'POST') {
         const body = await readBody(req);
         const falha = utils.validarLead(body); if (falha) return json(res,400,{erro:falha});
-        return json(res, 201, await store.createLead(body));
+        if (!dentroDoLimite(`criar-lead:${quem.id}`, 60, 60_000)) return json(res, 429, { erro: 'Muitos leads seguidos. Espere um minuto.' });
+        /* O gatilho do banco põe como responsável quem cuida da conversa do
+           cliente; sem conversa, quem criou. Aqui o servidor fala com a chave de
+           serviço (auth.uid() vazio), então mandamos quem criou explicitamente. */
+        let responsavel_id = quem.id;
+        if (body.responsavel_id !== undefined && body.responsavel_id !== quem.id) {
+          if (body.responsavel_id === null) responsavel_id = null;
+          else if (!U.ehUuid(body.responsavel_id) || !equipe() || !(await equipe().vendedor(body.responsavel_id))) return json(res, 400, { erro: 'Essa pessoa não pode receber leads do CRM.' });
+          else responsavel_id = body.responsavel_id;
+        }
+        const novo = await store.createLead({ ...body, responsavel_id: USA_SUPABASE ? responsavel_id : undefined });
+        if (novo && ['concluido', 'perdido'].includes(novo.status)) await auditar(quem, 'lead_fechado', { tabela: 'leads', registro: novo.id, detalhes: { de: null, para: novo.status, valor_pago: novo.valor_pago } });
+        return json(res, 201, novo);
       }
 
       // /api/leads/:id  (PATCH | DELETE | GET)
@@ -519,13 +566,30 @@ const server = http.createServer(async (req, res) => {
         }
         if (req.method === 'PATCH') {
           const body = await readBody(req); const falha = utils.validarLead(body,true); if (falha) return json(res,400,{erro:falha});
+          const antes = await store.getLead(id);
+          if (!antes) return json(res, 404, { erro: 'lead não encontrado' });
           const updated = await store.updateLead(id, body);
-          return updated ? json(res, 200, updated) : json(res, 404, { erro: 'lead não encontrado' });
+          if (!updated) return json(res, 404, { erro: 'lead não encontrado' });
+          // auditoria: fechamento (concluído/perdido), reabertura e mudança de valores
+          if (updated.status !== antes.status && ['concluido', 'perdido'].includes(updated.status)) {
+            await auditar(quem, 'lead_fechado', { tabela: 'leads', registro: id, detalhes: { de: antes.status, para: updated.status, valor_pago: Number(updated.valor_pago) || 0 } });
+          } else if (updated.status !== antes.status && ['concluido', 'perdido'].includes(antes.status)) {
+            await auditar(quem, 'lead_reaberto', { tabela: 'leads', registro: id, detalhes: { de: antes.status, para: updated.status } });
+          }
+          const valores = ['valor_orcado', 'valor_pago'].filter(k => Number(antes[k] || 0) !== Number(updated[k] || 0));
+          if (valores.length) await auditar(quem, 'lead_valores', { tabela: 'leads', registro: id, detalhes: Object.fromEntries(valores.map(k => [k, { antes: Number(antes[k]) || 0, depois: Number(updated[k]) || 0 }])) });
+          return json(res, 200, updated);
         }
         if (req.method === 'DELETE') {
-          return (await store.deleteLead(id)) ? json(res, 200, { ok: true })
-                                              : json(res, 404, { erro: 'lead não encontrado' });
+          // apagar é só de gestor/admin (mesma regra do banco para o navegador)
+          if (!ehGestor) return json(res, 403, { erro: 'Só um gestor pode apagar leads.', codigo: 'so_gestor' });
+          const antes = await store.getLead(id);
+          if (!antes) return json(res, 404, { erro: 'lead não encontrado' });
+          if (!(await store.deleteLead(id))) return json(res, 404, { erro: 'lead não encontrado' });
+          await auditar(quem, 'apagar_lead', { tabela: 'leads', registro: id, detalhes: { nome: antes.nome, status: antes.status, origem: antes.origem, valor_orcado: antes.valor_orcado, valor_pago: antes.valor_pago, responsavel_id: antes.responsavel_id || null } });
+          return json(res, 200, { ok: true });
         }
+        return json(res, 405, { erro: 'método não permitido' });
       }
 
       // GET /api/stats
@@ -595,10 +659,15 @@ const server = http.createServer(async (req, res) => {
           }
         }
         if (req.method === 'PATCH') {
-          return json(res, 200, await store.salvarIntegracao(canal, await readBody(req)));
+          const b = await readBody(req);
+          const r = await store.salvarIntegracao(canal, b);
+          await auditar(quem, 'integracao_salvar', { tabela: 'integracoes_ads', registro: canal, detalhes: { campos: Object.keys(b).slice(0, 20) } });
+          return json(res, 200, r);
         }
         if (req.method === 'DELETE') {
-          return json(res, 200, await store.limparIntegracao(canal));
+          const r = await store.limparIntegracao(canal);
+          await auditar(quem, 'integracao_apagar', { tabela: 'integracoes_ads', registro: canal });
+          return json(res, 200, r);
         }
         return json(res, 405, { erro: 'método não permitido' });
       }
@@ -616,7 +685,9 @@ const server = http.createServer(async (req, res) => {
         }
         const dados = await readBody(req);
         if (!dados || !dados.canal) return json(res, 400, { erro: 'informe o canal' });
-        return json(res, 200, await store.salvarMetrica(dados));
+        const roi = await store.salvarMetrica(dados);
+        await auditar(quem, 'investimento_salvar', { tabela: 'metricas_canal', registro: String(dados.canal).slice(0, 20), detalhes: { competencia: dados.competencia || null, investimento: Number(dados.investimento) || 0 } });
+        return json(res, 200, roi);
       }
 
       /* ============================================================
@@ -628,8 +699,8 @@ const server = http.createServer(async (req, res) => {
         const sb = adminSupabase();
         if (!sb) return json(res, 503, { erro: 'Servidor sem a chave do banco configurada.' });
         const { data, error } = await sb.from('perfis')
-          .select('id,nome,email,papel,ativo').eq('id', quem.id).maybeSingle();
-        if (error) return json(res, 500, { erro: error.message });
+          .select('id,nome,email,papel,ativo,cargo,telefone,avatar_cor,apps,recebe_leads,precisa_trocar_senha').eq('id', quem.id).maybeSingle();
+        if (error) return json(res, 503, { erro: 'Não consegui ler o seu perfil.' });
         return json(res, 200, data || {
           id: quem.id, nome: '', email: quem.email || '',
           papel: quem.papel || 'atendente', ativo: true,
@@ -638,13 +709,29 @@ const server = http.createServer(async (req, res) => {
 
       // PATCH /api/perfil → troca só o PRÓPRIO nome (o id vem do token, não do corpo)
       if (pathname === '/api/perfil' && req.method === 'PATCH') {
-        const nome = texto1((await readBody(req)).nome, 80).trim();
-        if (!nome) return json(res, 400, { erro: 'Informe o seu nome.' });
+        const b = await readBody(req);
+        const patch = {};
+        if ('nome' in b || !Object.keys(b).length) { const nome = texto1(b.nome, 80).trim(); if (!nome) return json(res, 400, { erro: 'Informe o seu nome.' }); patch.nome = nome; }
+        if ('cargo' in b) patch.cargo = texto1(b.cargo, 60).trim() || null;
+        if ('telefone' in b) {
+          const t = texto1(b.telefone, 30).replace(/\D/g, '');
+          if (t && (t.length < 10 || t.length > 13)) return json(res, 400, { erro: 'Telefone com DDD, por favor.' });
+          patch.telefone = t || null;
+        }
+        if ('avatar_cor' in b) {
+          if (b.avatar_cor !== null && !/^#[0-9a-f]{6}$/i.test(String(b.avatar_cor))) return json(res, 400, { erro: 'Cor inválida (use #RRGGBB).' });
+          patch.avatar_cor = b.avatar_cor;
+        }
+        if ('preferencias' in b) {
+          if (!b.preferencias || typeof b.preferencias !== 'object' || Array.isArray(b.preferencias) || JSON.stringify(b.preferencias).length > 4000) return json(res, 400, { erro: 'Preferências inválidas.' });
+          patch.preferencias = b.preferencias;
+        }
         const sb = adminSupabase();
         if (!sb) return json(res, 503, { erro: 'Servidor sem a chave do banco configurada.' });
-        const { error } = await sb.from('perfis').update({ nome }).eq('id', quem.id);
-        if (error) return json(res, 500, { erro: error.message });
-        return json(res, 200, { ok: true, nome });
+        const { error } = await sb.from('perfis').update(patch).eq('id', quem.id);
+        if (error) return json(res, 503, { erro: 'Não consegui salvar o seu perfil.' });
+        acesso().esquecer(quem.id);
+        return json(res, 200, { ok: true, ...patch });
       }
 
       /* ============================================================
@@ -656,12 +743,13 @@ const server = http.createServer(async (req, res) => {
         const sb = adminSupabase();
         if (!sb) return json(res, 503, { erro: 'Servidor sem a chave do banco configurada.' });
         // quem não é admin enxerga apenas o próprio cadastro
+        // admin e gestor veem todo mundo; atendente só o próprio cadastro
         let consulta = sb.from('perfis')
-          .select('id,nome,email,papel,ativo,created_at').order('created_at');
-        if (!ehAdmin) consulta = consulta.eq('id', quem.id);
+          .select('id,nome,email,papel,ativo,created_at,apps,cargo,telefone,avatar_cor,recebe_leads,ultimo_acesso_em,ultimo_app,precisa_trocar_senha,desativado_em').order('created_at');
+        if (!ehGestor) consulta = consulta.eq('id', quem.id);
         const { data, error } = await consulta;
-        if (error) return json(res, 500, { erro: error.message });
-        return json(res, 200, { equipe: data || [], souAdmin: ehAdmin, meuId: quem.id });
+        if (error) return json(res, 503, { erro: 'Não consegui ler a equipe.' });
+        return json(res, 200, { equipe: data || [], souAdmin: ehAdmin, souGestor: ehGestor, meuId: quem.id, papeis: U.PAPEIS, apps: U.APPS });
       }
 
       if (pathname === '/api/equipe' && req.method === 'POST') {
@@ -674,7 +762,10 @@ const server = http.createServer(async (req, res) => {
         const nome  = texto1(bruto.nome, 80).trim();
         const email = texto1(bruto.email, 160).trim().toLowerCase();
         const senha = texto1(bruto.senha, 200);
-        const papel = ['admin', 'agenda'].includes(bruto.papel) ? bruto.papel : 'atendente'; // 'agenda' = so presenca
+        const papel = U.PAPEIS.includes(bruto.papel) ? bruto.papel : 'atendente'; // 'agenda' = so presenca
+        if (bruto.apps !== undefined && (!Array.isArray(bruto.apps) || bruto.apps.some(a => !U.APPS.includes(a)))) return json(res, 400, { erro: `Apps válidos: ${U.APPS.join(', ')}.` });
+        const apps = papel === 'agenda' ? ['agenda'] : (Array.isArray(bruto.apps) ? [...new Set(bruto.apps)] : U.APPS);
+        const cargo = texto1(bruto.cargo, 60).trim() || null;
 
         if (!nome) return json(res, 400, { erro: 'Informe o nome da pessoa.' });
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
@@ -694,17 +785,19 @@ const server = http.createServer(async (req, res) => {
         if (error) {
           const jaExiste = /already been registered|already exists/i.test(error.message);
           return json(res, jaExiste ? 409 : 400, {
-            erro: jaExiste ? 'Já existe alguém cadastrado com esse e-mail.' : error.message });
+            erro: jaExiste ? 'Já existe alguém cadastrado com esse e-mail.' : 'Não consegui criar o usuário. Confira o e-mail e a senha.' });
         }
 
-        // o gatilho do banco cria o perfil; aqui só acertamos nome e papel
+        // o gatilho do banco cria o perfil; aqui acertamos nome, papel, apps e a troca obrigatória da senha
+        const precisa_trocar_senha = bruto.trocar_senha !== false;
         const { error: erroPerfil } = await sb.from('perfis')
-          .update({ nome, papel, ativo: true }).eq('id', data.user.id);
+          .update({ nome, papel, ativo: true, apps, cargo, convidado_por: quem.id, precisa_trocar_senha }).eq('id', data.user.id);
+        await auditar(quem, 'equipe_criar', { tabela: 'perfis', registro: data.user.id, detalhes: { email, papel, apps } });
         if (erroPerfil) {
           return json(res, 200, { ok: true, id: data.user.id, nome, email, papel,
-            aviso: 'Usuário criado, mas não consegui ajustar o perfil: ' + erroPerfil.message });
+            aviso: 'Usuário criado, mas não consegui ajustar o perfil. Confira na lista da equipe.' });
         }
-        return json(res, 201, { ok: true, id: data.user.id, nome, email, papel });
+        return json(res, 201, { ok: true, id: data.user.id, nome, email, papel, apps, precisa_trocar_senha });
       }
 
       /* ---- Equipe: quem é atendente e quem é administrador ---- */
@@ -713,7 +806,7 @@ const server = http.createServer(async (req, res) => {
 
         const bruto = await readBody(req);
         const id    = texto1(bruto.id, 60);
-        const papel = ['admin', 'agenda'].includes(bruto.papel) ? bruto.papel : 'atendente'; // 'agenda' = so presenca
+        const papel = U.PAPEIS.includes(bruto.papel) ? bruto.papel : 'atendente'; // 'agenda' = so presenca
         if (!ehUuid(id)) return json(res, 400, { erro: 'Informe quem você quer alterar.' });
 
         const sb = adminSupabase();
@@ -737,9 +830,17 @@ const server = http.createServer(async (req, res) => {
           }
         }
 
-        const { error } = await sb.from('perfis').update({ papel }).eq('id', id);
-        if (error) return json(res, 500, { erro: error.message });
-        return json(res, 200, { ok: true, papel });
+        const { data: antesPapel } = await sb.from('perfis').select('papel,apps').eq('id', id).maybeSingle();
+        if (!antesPapel) return json(res, 404, { erro: 'Pessoa não encontrada.' });
+        const mudanca = { papel };
+        // 'agenda' só marca presença: fica só com a Agenda; quem sai dela volta a ter todos os apps
+        if (papel === 'agenda') mudanca.apps = ['agenda'];
+        else if (antesPapel.papel === 'agenda' && (antesPapel.apps || []).join() === 'agenda') mudanca.apps = U.APPS;
+        const { error } = await sb.from('perfis').update(mudanca).eq('id', id);
+        if (error) return json(res, 503, { erro: 'Não consegui mudar a função.' });
+        acesso().esquecer(id);
+        await auditar(quem, 'equipe_papel', { tabela: 'perfis', registro: id, detalhes: { de: antesPapel.papel, para: papel } });
+        return json(res, 200, { ok: true, papel, ...(mudanca.apps ? { apps: mudanca.apps } : {}) });
       }
 
       /* ---- Equipe: ligar/desligar o acesso de alguém ---- */
@@ -772,10 +873,13 @@ const server = http.createServer(async (req, res) => {
           }
         }
 
+        const ligar = bruto.ativo === true;
         const { error } = await sb.from('perfis')
-          .update({ ativo: bruto.ativo === true }).eq('id', id);
-        if (error) return json(res, 500, { erro: error.message });
-        return json(res, 200, { ok: true, ativo: bruto.ativo === true });
+          .update({ ativo: ligar, desativado_em: ligar ? null : new Date().toISOString(), desativado_por: ligar ? null : quem.id }).eq('id', id);
+        if (error) return json(res, 503, { erro: 'Não consegui mudar o acesso.' });
+        acesso().esquecer(id);                 // corta na hora neste servidor (sem esperar o cache)
+        await auditar(quem, ligar ? 'equipe_reativar' : 'equipe_desativar', { tabela: 'perfis', registro: id });
+        return json(res, 200, { ok: true, ativo: ligar });
       }
 
       /* ============================================================
@@ -783,6 +887,7 @@ const server = http.createServer(async (req, res) => {
          ============================================================ */
       // GET /api/clientes?q= → lista resumida (gasto, serviços, último contato)
       if (pathname === '/api/clientes' && req.method === 'GET') {
+        if (!dentroDoLimite(`clientes:${quem.id}`, 40, 60_000)) return json(res, 429, { erro: 'Muitas buscas seguidas. Espere um pouco.' });
         try {
           const busca = url.searchParams.get('q') || '';
           const fichas = await carregarBaseClientes();
@@ -822,7 +927,7 @@ const server = http.createServer(async (req, res) => {
             totalBase: fichas.size,
             faturamentoBase: somar(todos),
           });
-        } catch (e) { return json(res, 503, { erro: e.message }); }
+        } catch (e) { console.error('clientes:', e && e.message); return json(res, 503, { erro: 'Não consegui ler a base de clientes agora.' }); }
       }
 
       // GET /api/clientes/:id → ficha 360 de um cliente
@@ -860,7 +965,7 @@ const server = http.createServer(async (req, res) => {
             leads: f.leads.slice(0, 10),
             agendamentos: f.agendamentos.slice(0, 10),
           });
-        } catch (e) { return json(res, 503, { erro: e.message }); }
+        } catch (e) { console.error('clientes:', e && e.message); return json(res, 503, { erro: 'Não consegui ler a base de clientes agora.' }); }
       }
 
       /* ============================================================
@@ -873,7 +978,7 @@ const server = http.createServer(async (req, res) => {
           .select('id,categoria,servico,escopo,fazemos,tipo_veiculo,observacao')
           .order('categoria', { ascending: true })
           .order('servico', { ascending: true });
-        if (error) return json(res, 500, { erro: error.message });
+        if (error) return json(res, 503, { erro: 'Não consegui ler o catálogo.' });
         return json(res, 200, { servicos: data || [], souAdmin: ehAdmin });
       }
 
@@ -891,8 +996,9 @@ const server = http.createServer(async (req, res) => {
         const { data, error } = await sb.from('catalogo_servicos')
           .update({ fazemos: bruto.fazemos }).eq('id', mcat[1])
           .select('id,categoria,servico,escopo,fazemos,tipo_veiculo,observacao').maybeSingle();
-        if (error) return json(res, 500, { erro: error.message });
+        if (error) return json(res, 503, { erro: 'Não consegui salvar o serviço.' });
         if (!data) return json(res, 404, { erro: 'serviço não encontrado' });
+        await auditar(quem, 'catalogo_fazemos', { tabela: 'catalogo_servicos', registro: mcat[1], detalhes: { servico: data.servico, fazemos: data.fazemos } });
         return json(res, 200, { ok: true, servico: data });
       }
 
@@ -903,8 +1009,10 @@ const server = http.createServer(async (req, res) => {
     serveStatic(res, pathname);
 
   } catch (err) {
-    console.error('Falha na requisição:', err.name);
-    json(res, err.status || 500, { erro: err.status ? err.message : 'Não foi possível concluir. Tente novamente.' });
+    const st = err && Number.isInteger(err.status) && err.status >= 400 && err.status < 600 ? err.status : 500;
+    if (st >= 500) console.error('Falha na requisição:', err && err.name, err && err.message);
+    if (res.headersSent) { try { res.end(); } catch { /* conexão já foi */ } return; }
+    json(res, st, { erro: err && err.status ? err.message : 'Não foi possível concluir. Tente novamente.', ...(err && err.codigo ? { codigo: err.codigo } : {}), ...(err && err.precisaConfirmar ? { precisaConfirmar: true } : {}) });
   }
 });
 
@@ -918,6 +1026,17 @@ const server = http.createServer(async (req, res) => {
 const NA_NUVEM = !!(process.env.RENDER || process.env.PORT);
 const HOST = process.env.CRM_HOST || (NA_NUVEM ? '0.0.0.0' : '127.0.0.1');
 
+/* Automações no próprio servidor: primeira volta 1 min depois de subir, depois
+   a cada CRM_AUTOMACOES_MIN (padrão 15). Desligue com CRM_AUTOMACOES=0. Em
+   produção gratuita o Render dorme: use também o agendador (rota protegida). */
+if (AUTOMACOES_LIGADAS && USA_SUPABASE && typeof setInterval === 'function') {
+  const volta = () => { const a = automacoes(); if (a) a.ciclo({ origem: 'timer' }).catch(e => console.warn('[automações]', e && e.message)); };
+  const t1 = setTimeout(volta, 60_000); if (t1.unref) t1.unref();
+  const t2 = setInterval(volta, INTERVALO_MIN * 60_000); if (t2.unref) t2.unref();
+}
+
+server.headersTimeout = 20_000;
+server.requestTimeout = 30_000;
 server.listen(PORT, HOST, () => {
   console.log(`\n🏁 IndyCar CRM rodando em http://localhost:${PORT}`);
   if (USA_SUPABASE) {

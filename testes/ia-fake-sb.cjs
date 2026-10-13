@@ -7,10 +7,11 @@ function criarFakeSb(tabelas = {}) {
   const db = {};
   for (const [k, v] of Object.entries(tabelas)) db[k] = v.map(x => ({ ...x }));
   const chamadas = [];
+  let falhas = null;
 
   function consulta(tabela) {
     const filtros = [];
-    let modo = 'select', dados = null, ordem = null, limite = null, inicio = 0, unico = null, colunas = '*';
+    let modo = 'select', dados = null, ordem = null, limite = null, inicio = 0, unico = null, colunas = '*', contar = false, soCabeca = false, conflito = null;
     const linhas = () => db[tabela] || (db[tabela] = []);
     const casa = r => filtros.every(f => f(r));
     const projeta = r => {
@@ -20,7 +21,11 @@ function criarFakeSb(tabelas = {}) {
       return o;
     };
     const q = {
-      select(c) { if (modo === 'select') colunas = c || '*'; else colunas = c || '*'; q._devolve = true; return q; },
+      select(c, o = {}) { colunas = c || '*'; q._devolve = true; if (o.count) contar = true; if (o.head) soCabeca = true; return q; },
+      is(k, v) { filtros.push(r => (r[k] ?? null) === v); return q; },
+      not(k, op, v) { filtros.push(op === 'is' ? (r => (r[k] ?? null) !== v) : (r => r[k] !== v)); return q; },
+      delete(o = {}) { modo = 'delete'; if (o.count) contar = true; return q; },
+      upsert(rows, o = {}) { modo = 'upsert'; dados = Array.isArray(rows) ? rows : [rows]; conflito = (o.onConflict || 'id').split(','); return q; },
       eq(k, v) { filtros.push(r => r[k] === v); return q; },
       neq(k, v) { filtros.push(r => r[k] !== v); return q; },
       in(k, vs) { filtros.push(r => vs.includes(r[k])); return q; },
@@ -40,8 +45,22 @@ function criarFakeSb(tabelas = {}) {
     };
     function executar() {
       chamadas.push({ tabela, modo });
-      if (tabela === '__erro__') return { data: null, error: { message: 'falha simulada' } };
+      if (tabela === '__erro__' || (falhas && falhas.has(tabela))) return { data: null, error: { message: 'falha simulada' } };
       let out;
+      if (modo === 'delete') {
+        const fora = linhas().filter(casa);
+        db[tabela] = linhas().filter(r => !casa(r));
+        return { data: soCabeca ? null : fora, error: null, count: fora.length };
+      }
+      if (modo === 'upsert') {
+        out = dados.map(r => {
+          const ja = linhas().find(x => conflito.every(k => x[k] === r[k]));
+          if (ja) { Object.assign(ja, r); return ja; }
+          const n = { id: crypto.randomUUID(), created_at: new Date().toISOString(), ...r }; linhas().push(n); return n;
+        });
+        out = out.map(projeta);
+        return unico ? { data: out[0] || null, error: null } : { data: out, error: null };
+      }
       if (modo === 'insert') {
         out = dados.map(r => { const n = { id: crypto.randomUUID(), created_at: new Date().toISOString(), ...r }; linhas().push(n); return n; });
       } else if (modo === 'update') {
@@ -49,6 +68,7 @@ function criarFakeSb(tabelas = {}) {
         for (const r of out) Object.assign(r, dados);
       } else {
         out = linhas().filter(casa);
+        if (contar && soCabeca) return { data: null, error: null, count: out.length };
       }
       if (ordem) out = [...out].sort((a, b) => (String(a[ordem.k] ?? '') < String(b[ordem.k] ?? '') ? -1 : String(a[ordem.k] ?? '') > String(b[ordem.k] ?? '') ? 1 : 0) * (ordem.asc ? 1 : -1));
       if (limite != null || inicio) out = out.slice(inicio, limite != null ? inicio + limite : undefined);
@@ -61,7 +81,39 @@ function criarFakeSb(tabelas = {}) {
     }
     return q;
   }
-  return { from: consulta, db, chamadas };
+  /* rpcs do banco que o servidor usa (mesma regra do Postgres) */
+  const rpcs = {
+    registrar_auditoria(a) { const n = { id: (db.auditoria || (db.auditoria = [])).length + 1, perfil_id: a.p_perfil, app: a.p_app, acao: a.p_acao, tabela: a.p_tabela, registro_id: a.p_registro, detalhes: a.p_detalhes, created_at: new Date().toISOString() }; db.auditoria.push(n); return n.id; },
+    notificar(a) {
+      const ns = db.notificacoes || (db.notificacoes = []);
+      if (!a.p_perfil) return null;
+      const p = (db.perfis || []).find(x => x.id === a.p_perfil);
+      if (!p || p.ativo === false) return null;
+      if (a.p_chave && ns.some(n => n.perfil_id === a.p_perfil && n.chave === a.p_chave)) return null;
+      const n = { id: crypto.randomUUID(), perfil_id: a.p_perfil, tipo: a.p_tipo, titulo: a.p_titulo, corpo: a.p_corpo, link: a.p_link, app: a.p_app, chave: a.p_chave, lida_em: null, created_at: new Date().toISOString() };
+      ns.push(n); return n.id;
+    },
+    crm_pegar_trava(a) {
+      const ts = db.crm_travas || (db.crm_travas = []);
+      const t = ts.find(x => x.nome === a.p_nome);
+      const agora = Date.now();
+      if (t && t.ate > agora && t.dono !== a.p_dono) return false;
+      if (t) Object.assign(t, { dono: a.p_dono, ate: agora + a.p_segundos * 1000 }); else ts.push({ nome: a.p_nome, dono: a.p_dono, ate: agora + a.p_segundos * 1000 });
+      return true;
+    },
+    crm_soltar_trava(a) { db.crm_travas = (db.crm_travas || []).filter(x => !(x.nome === a.p_nome && x.dono === a.p_dono)); return true; },
+  };
+  async function rpc(nome, args = {}) {
+    chamadas.push({ rpc: nome, args });
+    if (falhas && falhas.has('rpc:' + nome)) return { data: null, error: { message: 'falha simulada' } };
+    if (!rpcs[nome]) return { data: null, error: { message: 'função não existe: ' + nome } };
+    return { data: rpcs[nome](args), error: null };
+  }
+  const auth = { admin: {
+    async createUser({ email }) { if ((db.__usuarios || []).includes(email)) return { data: null, error: { message: 'already been registered' } }; (db.__usuarios ||= []).push(email); const id = crypto.randomUUID(); (db.perfis ||= []).push({ id, email, papel: 'atendente', ativo: true, apps: ['atendimento', 'crm', 'agenda', 'comunicar', 'orcador', 'ads'] }); return { data: { user: { id } }, error: null }; },
+    async updateUserById(id, dados) { (db.__senhas ||= {})[id] = !!dados.password; return { data: { user: { id } }, error: null }; },
+  } };
+  return { from: consulta, rpc, auth, db, chamadas, falhar: nomes => { falhas = new Set(nomes); } };
 }
 
 /* IA falsa roteirizada: cada chamada consome o próximo roteiro.

@@ -33,6 +33,8 @@ function tabelas() {
 
 async function subir({ roteiros = [], papel = 'admin', usuario = 'u-teste' } = {}) {
   const sb = criarFakeSb(tabelas());
+  // o porteiro lê o perfil no banco: papel da equipe e o CRM nos apps
+  for (const id of new Set([usuario, 'atendente-a', 'atendente-b'])) sb.db.perfis.push({ id, nome: id, papel, ativo: true, apps: ['crm'] });
   const ia = criarIAFalsa(roteiros);
   const login = { papel, id: usuario };
   const store = {

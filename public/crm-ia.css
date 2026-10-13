@@ -168,3 +168,7 @@
   .cia-btn,.cia-fab{transition:none}
 }
 html[data-trocando-tema] .cia *{transition:none!important}
+
+/* rodada 3: tarefa que a IA propõe/cria */
+.cia-tarefa{margin:6px 0 0;display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;font-size:.86rem;font-weight:600;color:var(--texto,inherit);overflow-wrap:anywhere}
+.cia-tarefa small{font-weight:500;color:var(--texto-suave)}

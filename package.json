@@ -7,7 +7,10 @@
     "start": "node server.js",
     "seed": "node -e \"require('./db').reseed(); console.log('Banco populado com dados de exemplo.')\"",
     "test": "node --test --test-isolation=none",
-    "mock": "node scripts/mock-server.mjs"
+    "mock": "node scripts/mock-server.mjs",
+    "segredos": "node scripts/segredos.mjs",
+    "auditar": "npm audit --omit=dev --audit-level=high",
+    "verificar": "npm test && npm run segredos && npm run auditar"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",
