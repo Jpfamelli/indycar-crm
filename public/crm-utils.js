@@ -181,15 +181,268 @@
     return {id: 't' + agora.getTime().toString(36) + Math.random().toString(36).slice(2, 6), texto, para: d.para || '', leadId: d.leadId ? String(d.leadId) : '', leadNome: String(d.leadNome || '').slice(0, 120), feita: false, criada: agora.toISOString()};
   }
   /* Colunas da lista de leads que a pessoa pode ligar e desligar. */
-  const COLUNAS_LEADS = ['cliente','carro','servico','origem','valor','status','etapa','entrada','campanha'];
-  const COLUNAS_PADRAO = ['cliente','carro','servico','origem','valor','status','etapa','entrada'];
+  const COLUNAS_LEADS = ['cliente','carro','servico','origem','valor','status','responsavel','etapa','entrada','campanha'];
+  const COLUNAS_PADRAO = ['cliente','carro','servico','origem','valor','status','responsavel','etapa','entrada'];
   function colunasValidas(lista) {
     const ok = Array.isArray(lista) ? COLUNAS_LEADS.filter(c => lista.includes(c)) : [];
     return ok.includes('cliente') ? ok : COLUNAS_PADRAO.slice();
   }
   /* Atalhos de teclado: sequência "g" + letra leva a uma aba. */
-  const ATALHOS_ABA = {d:'dashboard', l:'leads', f:'pipeline', c:'clientes', i:'ia', o:'origem', s:'servicos'};
-  const api = {normalizar,digitos,buscar,validarLead,nascimento,moeda,csv,ETAPAS,ABERTAS,LIMITE_PARADO,valorLead,diasNaEtapa,parado,textoDias,resumoColuna,periodo,metricas,funilPassagem,comparar,motivoPerda,comMotivoPerda,telE164,linkWhatsApp,linkLigar,linkConversa,linkComunicar,linkAgenda,formatarTelefone,paginar,linhaDoTempo,situacaoTarefa,ordenarTarefas,novaTarefa,COLUNAS_LEADS,COLUNAS_PADRAO,colunasValidas,ATALHOS_ABA};
+  const ATALHOS_ABA = {d:'dashboard', l:'leads', f:'pipeline', c:'clientes', i:'ia', o:'origem', s:'servicos', e:'equipe', t:'dashboard'};
+  /* ---------- Rodada 3 (tela) — login, acesso, equipe, tarefas, notificações ---------- */
+  const EH_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const ehUuid = v => EH_UUID.test(String(v ?? ''));
+  const PAPEIS = ['admin','gestor','atendente','agenda'];
+  const ROTULO_PAPEL = {admin:'Administrador', gestor:'Gestor', atendente:'Atendente', agenda:'Agenda (só presença)'};
+  const ehGestor = p => p === 'admin' || p === 'gestor';
+  /* Endereço de cada app do ecossistema (links das notificações são relativos ao app de origem). */
+  const URL_APPS = {atendimento:'https://indycar-atendimento.onrender.com', crm:'https://indycar-crm.onrender.com',
+    agenda:'https://indycar-agendamentos.onrender.com', comunicar:'https://indycar-posvenda.onrender.com',
+    orcador:'https://indycar-orcador.netlify.app'};
+  const NOME_APPS = {atendimento:'Atendimento', crm:'CRM', agenda:'Agenda', comunicar:'Comunicar', orcador:'Orçador'};
+  /* Quem pode usar o app: admin sempre; papel agenda nunca (exceto a própria Agenda);
+     sem lista de apps (perfil antigo) conta como liberado — o servidor confere de novo. */
+  function acessoApp(perfil, app = 'crm') {
+    if (!perfil) return {ok: false, motivo: 'sem_perfil'};
+    if (perfil.ativo === false) return {ok: false, motivo: 'desativado'};
+    if (perfil.papel === 'admin') return {ok: true, motivo: null};
+    if (perfil.papel === 'agenda' && app !== 'agenda') return {ok: false, motivo: 'papel_agenda'};
+    if (!PAPEIS.includes(perfil.papel)) return {ok: false, motivo: 'papel_invalido'};
+    if (Array.isArray(perfil.apps) && !perfil.apps.includes(app)) return {ok: false, motivo: 'sem_app'};
+    return {ok: true, motivo: null};
+  }
+  function appsPermitidos(perfil, atual = 'crm') {
+    if (!perfil || perfil.ativo === false) return [];
+    const lista = perfil.papel === 'admin' ? Object.keys(URL_APPS)
+      : perfil.papel === 'agenda' ? ['agenda'] : (Array.isArray(perfil.apps) ? perfil.apps : []);
+    return lista.filter(a => a !== atual && URL_APPS[a]).map(a => ({app: a, nome: NOME_APPS[a], url: URL_APPS[a]}));
+  }
+  /* 401/403 do servidor viram uma ação da tela, pelo `codigo` (aceita hífen ou sublinhado). */
+  function acaoErroAcesso(status, corpo) {
+    if (status !== 401 && status !== 403) return null;
+    const c = String((corpo && (corpo.codigo || corpo.code)) || '').toLowerCase().replace(/-/g, '_');
+    if (/desativad|inativ|bloquead/.test(c)) return 'desativado';
+    if (/trocar_senha|troca_senha|precisa_trocar/.test(c)) return 'trocar_senha';
+    if (/mfa|aal2|duas_etapas/.test(c)) return 'mfa';
+    if (/sem_acesso|sem_app|app_negado|acesso_app|papel_agenda|sem_perfil/.test(c)) return 'sem_acesso';
+    if (/expirad|token|sessao|sem_login|nao_logado|login/.test(c)) return 'login';
+    return status === 401 ? 'login' : 'proibido';
+  }
+  /* Erro do Supabase Auth em português simples. */
+  function mensagemLogin(err) {
+    const m = String((err && (err.message || err.msg)) || err || '');
+    const cod = String((err && err.code) || '');
+    if (/failed to fetch|networkerror|network request|load failed|sem conex/i.test(m) || cod === 'network') return 'Sem internet ou servidor fora do ar. Confira a conexão e tente de novo.';
+    if (/invalid login|invalid_credentials|invalid email or password/i.test(m + cod)) return 'E-mail ou senha incorretos.';
+    if (/banned|desativad|user_banned/i.test(m + cod)) return 'Seu acesso foi desativado. Fale com o gestor da loja.';
+    if (/not confirmed|email_not_confirmed/i.test(m + cod)) return 'Este e-mail ainda não foi confirmado. Peça ao administrador para liberar o acesso.';
+    if (/rate limit|too many|over_request|over_email/i.test(m + cod)) return 'Muitas tentativas em pouco tempo. Espere alguns minutos e tente de novo.';
+    if (/same.*password|different from the old/i.test(m + cod)) return 'A senha nova precisa ser diferente da atual.';
+    if (/weak|password should|at least/i.test(m)) return 'Senha fraca: use pelo menos 8 caracteres, misturando letras e números.';
+    if (/invalid totp|invalid code|expired|mfa/i.test(m + cod)) return 'Código inválido ou vencido. Confira o app autenticador e digite o código atual.';
+    return m ? 'Não deu certo: ' + m.slice(0, 160) : 'Não deu certo. Tente de novo.';
+  }
+  /* Espera progressiva depois de 5 erros seguidos: 30 s, 1 min, 2 min… até 15 min. */
+  const esperaLogin = falhas => falhas < 5 ? 0 : Math.min(900, 30 * 2 ** (falhas - 5));
+  function validarNovaSenha(s1, s2, email) {
+    const a = String(s1 ?? ''), e = String(email ?? '').trim().toLowerCase();
+    if (a.length < 8) return 'A senha precisa ter pelo menos 8 caracteres.';
+    if (a.length > 72) return 'Use no máximo 72 caracteres.';
+    if (a !== String(s2 ?? '')) return 'As duas senhas não são iguais.';
+    if (e && (a.toLowerCase() === e || a.toLowerCase() === e.split('@')[0])) return 'A senha não pode ser igual ao seu e-mail.';
+    if (/^(.)\1+$/.test(a) || /^(12345678|87654321|senha123|password|indycar1?)$/i.test(a)) return 'Essa senha é fácil demais de adivinhar.';
+    return null;
+  }
+  const codigoMfaValido = c => /^\d{6}$/.test(String(c ?? '').replace(/\s/g, ''));
+  /* Link de uma notificação: /?lead= do próprio CRM abre aqui; o resto abre no app de origem.
+     Endereço absoluto só se for de um app do ecossistema (nada de link solto vindo do banco). */
+  function linkNotificacao(n, atual = 'crm') {
+    const link = String((n && n.link) || '').trim(), app = (n && n.app) || atual;
+    if (!link) return {interno: null, url: null};
+    let u;
+    try { u = new URL(link, (URL_APPS[app] || URL_APPS[atual]) + '/'); } catch { return {interno: null, url: null}; }
+    const permitido = Object.values(URL_APPS).some(b => new URL(b).origin === u.origin);
+    if (!permitido || !/^https:$/.test(u.protocol)) return {interno: null, url: null};
+    const lead = u.searchParams.get('lead');
+    const mesmo = u.origin === new URL(URL_APPS[atual]).origin;
+    if (mesmo && lead && ehUuid(lead)) return {interno: {lead}, url: u.href};
+    if (mesmo && u.search) return {interno: {busca: u.search}, url: u.href};
+    return {interno: null, url: u.href};
+  }
+  const CORES_AVATAR = ['#e50914','#3b82f6','#22c55e','#a855f7','#f59e0b','#06b6d4','#ec4899','#64748b'];
+  function corAvatar(p) {
+    const c = p && p.avatar_cor;
+    if (/^#[0-9a-f]{6}$/i.test(String(c ?? ''))) return c;
+    const s = String((p && (p.id || p.nome)) || '?'); let h = 0;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return CORES_AVATAR[h % CORES_AVATAR.length];
+  }
+  /* Responsável do lead: '' todos · 'meus' · 'sem' · uuid de uma pessoa. */
+  function filtroResponsavel(l, filtro, meuId) {
+    if (!filtro) return true;
+    const r = l && l.responsavel_id ? String(l.responsavel_id) : '';
+    if (filtro === 'meus') return !!meuId && r === String(meuId);
+    if (filtro === 'sem') return !r;
+    return r === String(filtro);
+  }
+  function funilPorResponsavel(leads, equipe = []) {
+    const nomes = new Map(equipe.map(p => [String(p.id), p]));
+    const linhas = new Map();
+    for (const l of leads) {
+      const id = l.responsavel_id ? String(l.responsavel_id) : '';
+      if (!linhas.has(id)) linhas.set(id, {perfil_id: id || null, nome: id ? (nomes.get(id)?.nome || 'Pessoa fora da equipe') : 'Sem responsável', porEtapa: Object.fromEntries(ETAPAS.map(e => [e, 0])), total: 0, abertos: 0, valorAberto: 0, ganhos: 0, faturamento: 0});
+      const x = linhas.get(id); x.total++;
+      if (x.porEtapa[l.status] !== undefined) x.porEtapa[l.status]++;
+      if (ABERTAS.includes(l.status)) { x.abertos++; x.valorAberto += valorLead(l); }
+      if (l.status === 'concluido') { x.ganhos++; x.faturamento += num(l.valor_pago); }
+    }
+    return [...linhas.values()].map(x => ({...x, valorAberto: Math.round(x.valorAberto * 100) / 100, faturamento: Math.round(x.faturamento * 100) / 100}))
+      .sort((a, b) => (a.perfil_id === null) - (b.perfil_id === null) || b.abertos - a.abertos || b.total - a.total);
+  }
+  /* Tarefas (tabela `tarefas`): vence_em é data e hora. */
+  function vencimentoDe(data, hora) {
+    if (!data) return null;
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(data); if (!m) throw new Error('Data inválida.');
+    const h = /^(\d{2}):(\d{2})$/.exec(hora || '17:30'); if (!h) throw new Error('Hora inválida.');
+    const d = new Date(+m[1], m[2] - 1, +m[3], +h[1], +h[2]);
+    if (!Number.isFinite(+d) || d.getDate() !== +m[3]) throw new Error('Data inválida.');
+    return d.toISOString();
+  }
+  function situacaoTarefaDb(t, agora = new Date()) {
+    if (!t) return 'sem_data';
+    if (t.status === 'feita') return 'feita';
+    if (t.status === 'cancelada') return 'cancelada';
+    const v = ms(t.vence_em); if (!Number.isFinite(v)) return 'sem_data';
+    const ini = new Date(agora.getFullYear(), agora.getMonth(), agora.getDate()).getTime(), fim = ini + DIA;
+    if (v < +agora) return 'atrasada';
+    return v < fim ? 'hoje' : 'futura';
+  }
+  function ordenarTarefasDb(lista, agora = new Date()) {
+    const peso = {atrasada: 0, hoje: 1, futura: 2, sem_data: 3, feita: 4, cancelada: 5};
+    return [...lista].sort((a, b) => peso[situacaoTarefaDb(a, agora)] - peso[situacaoTarefaDb(b, agora)]
+      || String(a.vence_em || '9').localeCompare(String(b.vence_em || '9'))
+      || (num(b.prioridade) || 2) - (num(a.prioridade) || 2)
+      || String(a.created_at || '').localeCompare(String(b.created_at || '')));
+  }
+  function agruparTarefas(lista, agora = new Date()) {
+    const g = {atrasadas: [], hoje: [], proximas: [], semData: []};
+    for (const t of ordenarTarefasDb(lista, agora)) {
+      const s = situacaoTarefaDb(t, agora);
+      if (s === 'atrasada') g.atrasadas.push(t); else if (s === 'hoje') g.hoje.push(t);
+      else if (s === 'futura') g.proximas.push(t); else if (s === 'sem_data') g.semData.push(t);
+    }
+    return g;
+  }
+  function validarTarefa(d) {
+    const titulo = String(d && d.titulo || '').replace(/\s+/g, ' ').trim();
+    if (!titulo) throw new Error('Escreva a tarefa.');
+    if (titulo.length > 200) throw new Error('Tarefa com até 200 caracteres.');
+    const descricao = String(d.descricao || '').trim();
+    if (descricao.length > 2000) throw new Error('Descrição com até 2.000 caracteres.');
+    const prioridade = Math.round(num(d.prioridade) || 2);
+    if (prioridade < 1 || prioridade > 3) throw new Error('Prioridade de 1 a 3.');
+    const row = {titulo, prioridade, origem: 'crm', status: 'aberta'};
+    if (descricao) row.descricao = descricao;
+    if (d.vence_em) { if (!Number.isFinite(ms(d.vence_em))) throw new Error('Data inválida.'); row.vence_em = new Date(d.vence_em).toISOString(); }
+    for (const k of ['responsavel_id', 'lead_id', 'cliente_id', 'conversa_id', 'agendamento_id']) {
+      if (d[k] == null || d[k] === '') continue;
+      if (!ehUuid(d[k])) throw new Error('Identificador inválido.');
+      row[k] = String(d[k]);
+    }
+    return row;
+  }
+  /* Lembrete antigo (localStorage) vira linha da tabela tarefas. */
+  function lembreteParaTarefa(l, meuId) {
+    const row = validarTarefa({titulo: l && l.texto, responsavel_id: ehUuid(meuId) ? meuId : null, lead_id: ehUuid(l && l.leadId) ? l.leadId : null,
+      vence_em: l && l.para && /^\d{4}-\d{2}-\d{2}$/.test(l.para) ? vencimentoDe(l.para, '17:30') : null});
+    if (l && l.feita) row.status = 'feita';
+    row.descricao = 'Importado dos lembretes deste aparelho.';
+    return row;
+  }
+  const ROTULO_PRIORIDADE = {1: 'Baixa', 2: 'Normal', 3: 'Urgente'};
+  /* Metas: AAAA-MM, intervalo do mês e projeção pelo ritmo. */
+  function mesAtual(agora = new Date()) { return agora.getFullYear() + '-' + String(agora.getMonth() + 1).padStart(2, '0'); }
+  function intervaloMes(mes) {
+    const m = /^(\d{4})-(\d{2})$/.exec(mes || ''); if (!m || +m[2] < 1 || +m[2] > 12) throw new Error('Mês inválido.');
+    const fim = new Date(+m[1], +m[2], 0).getDate();
+    return {de: `${m[1]}-${m[2]}-01`, ate: `${m[1]}-${m[2]}-${String(fim).padStart(2, '0')}`, dias: fim};
+  }
+  function progressoMeta(realizado, alvo, mes, agora = new Date()) {
+    const r = num(realizado), a = num(alvo);
+    const {dias} = intervaloMes(mes), atual = mes === mesAtual(agora);
+    const passados = atual ? agora.getDate() : (mes < mesAtual(agora) ? dias : 0);
+    const projecao = passados ? Math.round(r / passados * dias * 100) / 100 : 0;
+    return {pct: a > 0 ? Math.min(100, Math.round(r / a * 100)) : 0, falta: Math.max(0, Math.round((a - r) * 100) / 100), projecao, noRitmo: a > 0 && projecao >= a};
+  }
+  const CAMPOS_META = ['leads', 'agendamentos', 'vendas', 'faturamento'];
+  function validarMetas(lista) {
+    if (!Array.isArray(lista)) throw new Error('Metas inválidas.');
+    const vistos = new Set();
+    return lista.map(m => {
+      const id = m.perfil_id ? String(m.perfil_id) : null;
+      if (id && !ehUuid(id)) throw new Error('Pessoa inválida.');
+      if (vistos.has(id)) throw new Error('Pessoa repetida nas metas.'); vistos.add(id);
+      const r = {perfil_id: id};
+      for (const k of CAMPOS_META) { const v = num(m[k]); if (v < 0 || v > (k === 'faturamento' ? 10000000 : 100000)) throw new Error('Meta fora do limite.'); r[k] = k === 'faturamento' ? Math.round(v * 100) / 100 : Math.round(v); }
+      return r;
+    });
+  }
+  /* GET /api/metas aceita dois formatos: lista plana [{perfil_id, leads…, realizado, projecao}]
+     ou o do servidor {loja:{meta, itens:{campo:{meta,realizado,projecao}}}, pessoas:[…]}. Sai sempre a lista plana. */
+  function normalizarMetas(r) {
+    if (Array.isArray(r)) return r.map(m => ({...m, perfil_id: m.perfil_id || null}));
+    if (!r || typeof r !== 'object') return [];
+    const linha = (perfil_id, x) => {
+      const out = {perfil_id, nome: x.nome, avatar_cor: x.avatar_cor || null, status: x.status || null, realizado: {}, projecao: {}};
+      for (const k of CAMPOS_META) {
+        const it = x.itens && x.itens[k];
+        out[k] = num(x.meta && x.meta[k]);
+        if (it) { if (it.realizado != null) out.realizado[k] = num(it.realizado); if (it.projecao != null) out.projecao[k] = num(it.projecao); }
+      }
+      return out;
+    };
+    return [...(r.loja ? [linha(null, r.loja)] : []), ...(Array.isArray(r.pessoas) ? r.pessoas.filter(p => p.perfil_id).map(p => linha(String(p.perfil_id), p)) : [])];
+  }
+  /* GET /api/desempenho: lista plana ou {pessoas:[…]} do servidor (sem a linha "Sem responsável"). */
+  function normalizarDesempenho(r) {
+    const l = Array.isArray(r) ? r : (r && (r.pessoas || r.equipe || r.desempenho)) || [];
+    return l.filter(x => x && x.perfil_id && !x.inativo);
+  }
+  /* GET /api/vendedores {vendedores:[…]} · /api/equipe/nomes […] · {equipe:[…]} */
+  function normalizarEquipe(r) {
+    const l = Array.isArray(r) ? r : (r && (r.vendedores || r.equipe || r.nomes)) || null;
+    return l ? l.filter(p => p && ehUuid(p.id) && p.papel !== 'agenda' && p.ativo !== false).map(p => ({id: String(p.id), nome: String(p.nome || 'Sem nome').slice(0, 80), papel: p.papel || 'atendente', avatar_cor: p.avatar_cor || null, cargo: p.cargo || null, abertos: p.abertos ?? null})) : null;
+  }
+  /* Quem pode mudar o responsável (mesma regra do servidor): gestor muda qualquer um;
+     atendente só passa lead dele ou pega lead sem dono; tirar o dono é só do gestor. */
+  function podeReatribuir(lead, perfil, novo) {
+    if (!perfil) return false;
+    if (ehGestor(perfil.papel)) return true;
+    if (novo === null || novo === '') return false;
+    const dono = lead && lead.responsavel_id ? String(lead.responsavel_id) : null;
+    return !dono || dono === String(perfil.id);
+  }
+  function ordenarDesempenho(lista, criterio = 'faturamento') {
+    const v = x => criterio === 'tempo_resposta_min' ? -(x[criterio] ?? Infinity) : num(x[criterio]);
+    return [...(lista || [])].sort((a, b) => v(b) - v(a) || num(b.faturamento) - num(a.faturamento) || String(a.nome).localeCompare(String(b.nome), 'pt-BR'));
+  }
+  const deveGravarAcesso = (ultimo, agora = Date.now()) => !Number.isFinite(Number(ultimo)) || agora - Number(ultimo) >= 5 * 60000;
+  /* preferências do perfil: mistura sem apagar chaves dos outros apps. */
+  function mesclarPreferencias(atual, novas) {
+    const a = atual && typeof atual === 'object' && !Array.isArray(atual) ? atual : {};
+    const out = {...a};
+    for (const [k, v] of Object.entries(novas || {})) out[k] = v && typeof v === 'object' && !Array.isArray(v) ? {...(a[k] && typeof a[k] === 'object' ? a[k] : {}), ...v} : v;
+    return out;
+  }
+  function tempoRelativo(iso, agora = Date.now()) {
+    const t = ms(iso); if (!Number.isFinite(t)) return '';
+    const s = Math.max(0, Math.round((agora - t) / 1000));
+    if (s < 60) return 'agora'; if (s < 3600) return Math.floor(s / 60) + ' min';
+    if (s < 86400) return Math.floor(s / 3600) + ' h';
+    const d = Math.floor(s / 86400); return d === 1 ? 'ontem' : d + ' dias';
+  }
+  const api = {normalizar,digitos,buscar,validarLead,nascimento,moeda,csv,ETAPAS,ABERTAS,LIMITE_PARADO,valorLead,diasNaEtapa,parado,textoDias,resumoColuna,periodo,metricas,funilPassagem,comparar,motivoPerda,comMotivoPerda,telE164,linkWhatsApp,linkLigar,linkConversa,linkComunicar,linkAgenda,formatarTelefone,paginar,linhaDoTempo,situacaoTarefa,ordenarTarefas,novaTarefa,COLUNAS_LEADS,COLUNAS_PADRAO,colunasValidas,ATALHOS_ABA,
+    ehUuid,PAPEIS,ROTULO_PAPEL,ehGestor,URL_APPS,NOME_APPS,acessoApp,appsPermitidos,acaoErroAcesso,mensagemLogin,esperaLogin,validarNovaSenha,codigoMfaValido,linkNotificacao,CORES_AVATAR,corAvatar,filtroResponsavel,funilPorResponsavel,vencimentoDe,situacaoTarefaDb,ordenarTarefasDb,agruparTarefas,validarTarefa,lembreteParaTarefa,ROTULO_PRIORIDADE,mesAtual,intervaloMes,progressoMeta,CAMPOS_META,validarMetas,normalizarMetas,normalizarDesempenho,normalizarEquipe,podeReatribuir,ordenarDesempenho,deveGravarAcesso,mesclarPreferencias,tempoRelativo};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.CrmUtils = api;
 })(typeof window !== 'undefined' ? window : globalThis);

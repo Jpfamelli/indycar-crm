@@ -25,19 +25,29 @@ async function authCabecalhos() {
   return cab;
 }
 
-/* Lança em status HTTP de erro — antes, um 400 do servidor virava "salvo com sucesso". */
-const api = async (url, opts) => {
+/* Lança em status HTTP de erro — antes, um 400 do servidor virava "salvo com sucesso".
+   401/403 viram ação da tela pelo `codigo` do servidor (CrmUtils.acaoErroAcesso):
+   sessão vencida tenta renovar o token UMA vez e repete o pedido; desativado/sem acesso/
+   troca de senha/duas etapas levam à tela certa; o resto vira erro com status e código. */
+function erroApi(msg, status, codigo) { const e = new Error(msg); e.status = status; e.codigo = codigo || null; return e; }
+const api = async (url, opts, renovou = false) => {
   let r;
   try {
     r = await fetch(url, { signal: AbortSignal.timeout(20000), ...opts, headers: { ...(await authCabecalhos()), ...(opts?.headers || {}) } });
   } catch (e) {
-    if (/sessão expirou/i.test(e.message)) throw e;
-    throw new Error('Sem conexão com o servidor. Verifique se ele está rodando.');
+    if (/sessão expirou/i.test(e.message)) { tratarAcesso('login'); throw e; }
+    throw erroApi(navigator.onLine === false ? 'Sem internet. Confira a conexão e tente de novo.' : 'Sem conexão com o servidor. Tente de novo em instantes.', 0, 'rede');
   }
   let corpo = null;
   try { corpo = await r.json(); } catch { /* resposta sem corpo JSON */ }
-  if (r.status === 401) { mostrarLogin('Sua sessão expirou. Entre de novo.'); throw new Error('Sessão expirada'); }
-  if (!r.ok) throw new Error((corpo && (corpo.erro || corpo.error)) || `Erro ${r.status} do servidor`);
+  const acao = CrmUtils.acaoErroAcesso(r.status, corpo);
+  if (acao === 'login' && !renovou && sb) {
+    // token vencido no meio do uso: renova sozinho e repete, sem derrubar a pessoa
+    try { const { data, error } = await sb.auth.refreshSession(); if (!error && data?.session) return api(url, opts, true); } catch { /* cai no login */ }
+  }
+  const msg = (corpo && (corpo.erro || corpo.error)) || (r.status === 403 ? 'Você não tem permissão para isso.' : `Erro ${r.status} do servidor`);
+  if (acao && acao !== 'proibido') { tratarAcesso(acao, corpo); throw erroApi(acao === 'login' ? 'Sessão expirada' : msg, r.status, acao); }
+  if (!r.ok) throw erroApi(msg, r.status, corpo?.codigo);
   return corpo;
 };
 const brl = CrmUtils.moeda;
@@ -57,9 +67,9 @@ const SERVICOS = ['Troca de Óleo de Motor','Troca de Óleo de Câmbio','Freios'
    TODOS  = base completa (dashboard, funil e o modal usam) */
 let STATUSES = [], ORIGENS = [], LEADS = [], TODOS = [], STATS = null;
 
-/* PERFIL   = quem está logado (nome, e-mail, papel)
-   SOU_ADMIN é só para a apresentação: o servidor confere de novo em cada rota. */
-let PERFIL = null, SOU_ADMIN = false;
+/* PERFIL   = quem está logado (nome, e-mail, papel, apps, cargo…)
+   SOU_ADMIN / SOU_GESTOR são só para a apresentação: o servidor confere de novo em cada rota. */
+let PERFIL = null, SOU_ADMIN = false, SOU_GESTOR = false;
 let CATALOGO = [];              // os 138 serviços, como vieram do banco
 
 /* ---------------- Navegação ---------------- */
@@ -72,16 +82,18 @@ const TITULOS = {
   servicos:      ['Serviços', 'O catálogo que a IA usa para responder o cliente'],
   integracoes:   ['Integrações', 'Meta Ads, Google Ads e o ROI de cada canal'],
   ia:            ['IA', 'Pergunte ao CRM, triagem e o resumo da semana'],
+  equipe:        ['Equipe e metas', 'Metas do mês, ranking e funil de cada vendedor'],
   configuracoes: ['Configurações', 'Sua conta, sua senha e a equipe'],
 };
 // a busca do topo só filtra estas abas — nas outras ela ficava visível e inerte
 // (Clientes e Serviços têm a própria busca, dentro da aba)
 const ABAS_COM_BUSCA = new Set(['leads', 'pipeline']);
 // "+ Novo Lead" não faz sentido no catálogo nem nas configurações
-const ABAS_SEM_NOVO = new Set(['servicos', 'configuracoes']);
+const ABAS_SEM_NOVO = new Set(['servicos', 'configuracoes', 'equipe']);
 
 function irPara(v) {
   if (!TITULOS[v]) return;
+  if ($(`.nav-item[data-view="${v}"]`)?.hidden) v = 'dashboard';   // aba escondida para o papel: não abre por atalho nem link
   $$('.nav-item').forEach(x => { x.classList.toggle('active', x.dataset.view === v); if (x.dataset.view === v) x.setAttribute('aria-current', 'page'); else x.removeAttribute('aria-current'); });
   $$('.view').forEach(x => x.classList.remove('active'));
   $(`#view-${v}`)?.classList.add('active');
@@ -93,6 +105,7 @@ function irPara(v) {
   if (v === 'clientes')      carregarClientes();
   if (v === 'servicos')      carregarCatalogo();
   if (v === 'configuracoes') carregarConfiguracoes();
+  if (v === 'equipe')        carregarEquipeMetas();
   try { sessionStorage.setItem('indycar_crm_aba', v); } catch { /* ignora */ }
 }
 $$('.nav-item').forEach(b => b.addEventListener('click', () => irPara(b.dataset.view)));
@@ -150,10 +163,18 @@ function toast(msg, ms = 3200) {
 /* ---------------- Carregar dados ---------------- */
 async function carregar() {
   // quem sou eu: define o que a tela mostra (o servidor confere de novo, sempre)
-  try {
-    PERFIL = await api('/api/perfil');
-    SOU_ADMIN = PERFIL?.papel === 'admin';
-  } catch { PERFIL = null; SOU_ADMIN = false; }
+  const primeiraVez = !STATS;
+  if (primeiraVez || !PERFIL) {
+    try { PERFIL = await carregarPerfil(); }
+    catch (e) { if (e.codigo && e.codigo !== 'rede') return; PERFIL = null; }
+    /* Portão da tela (acesso.js): desativado, troca obrigatória de senha e app
+       fora dos liberados param aqui — o servidor também devolve 401/403. */
+    if (!(await portaoDeAcesso(PERFIL))) return;
+  }
+  SOU_ADMIN = PERFIL?.papel === 'admin';
+  SOU_GESTOR = CrmUtils.ehGestor(PERFIL?.papel);
+  aplicarPapelNaTela();
+  iniciarSessao();
 
   /* Esconde o que só admin usa. É só apresentação — o servidor devolve 403
      de qualquer forma; isto evita o atendente clicar e levar erro na cara.
@@ -183,6 +204,7 @@ async function carregar() {
       abrirPorLink();
     }
   } catch (err) {
+    if (err.codigo && err.codigo !== 'rede' && err.status && [401, 403].includes(err.status) && document.body.classList.contains('deslogado')) return;
     // antes, uma falha aqui deixava a tela em branco sem explicação
     toast('⚠️ ' + err.message);
     const alvo = $('#kpis');
@@ -283,7 +305,7 @@ async function abrirModal(id, pre = {}) {
   LEAD_ABERTO = l ? l.id : null;
   $('#modalTitle').textContent = l ? 'Lead' : 'Novo lead';
   $('#modalTitle').classList.toggle('sr', !!l);
-  $('#btnExcluir').style.display = l ? 'inline-flex' : 'none';
+  $('#btnExcluir').style.display = l && SOU_GESTOR ? 'inline-flex' : 'none';   // só gestor/admin apaga (o banco também barra)
   $('#leadFicha').hidden = !l;
   $('#painelDados').setAttribute('role', l ? 'tabpanel' : 'region');
   preencherForm(l, pre);
@@ -880,7 +902,7 @@ $$('#filtrosServico .filtro-pill').forEach(b => b.addEventListener('click', () =
 /* ============================================================
    CONFIGURAÇÕES — minha conta · equipe e sistema
    ============================================================ */
-const LABEL_PAPEL = { admin:'Administrador', atendente:'Atendente' };
+const LABEL_PAPEL = CrmUtils.ROTULO_PAPEL;
 
 /* Seletor interno: "Minha conta" x "Equipe e sistema" */
 $$('#configTabs .config-pilula').forEach(b => b.addEventListener('click', () => {
@@ -891,12 +913,10 @@ $$('#configTabs .config-pilula').forEach(b => b.addEventListener('click', () => 
 
 async function carregarConfiguracoes() {
   try {
-    PERFIL = await api('/api/perfil');
-    SOU_ADMIN = PERFIL?.papel === 'admin';
-    $('#perfilNome').value  = PERFIL?.nome ?? '';
-    $('#perfilEmail').value = PERFIL?.email ?? '';
-    $('#perfilPapel').value = LABEL_PAPEL[PERFIL?.papel] ?? (PERFIL?.papel || '—');
-  } catch (err) { toast('⚠️ ' + err.message); }
+    PERFIL = await carregarPerfil();
+    SOU_ADMIN = PERFIL?.papel === 'admin'; SOU_GESTOR = CrmUtils.ehGestor(PERFIL?.papel);
+    preencherMinhaConta();
+  } catch (err) { if (!err.codigo || err.codigo === 'rede') toast('⚠️ ' + err.message); }
 
   renderSistemaInfo();
   await carregarEquipe();
@@ -929,19 +949,18 @@ async function carregarEquipe() {
     $('#avisoCadastro').hidden = SOU_ADMIN;
 
     el.innerHTML = lista.length ? lista.map(p => {
-      const papel = p.papel === 'admin' ? 'admin' : 'atendente';
+      const papel = CrmUtils.PAPEIS.includes(p.papel) ? p.papel : 'atendente';
       return `
       <div class="equipe-item${p.ativo ? '' : ' inativo'}">
-        <span class="avatar">${esc(iniciais(p.nome))}</span>
+        <span class="avatar" style="--cor-avatar:${esc(CrmUtils.corAvatar(p))}">${esc(iniciais(p.nome))}</span>
         <div class="equipe-txt">
           <strong>${esc(p.nome)}</strong>${p.id === r.meuId ? ' <em class="voce">(você)</em>' : ''}<br>
-          <small>${esc(p.email)}${p.ativo ? '' : ' · sem acesso'}</small>
+          <small>${esc(p.email)}${p.ativo ? '' : ' · sem acesso'}${p.ultimo_acesso_em ? ' · visto ' + esc(CrmUtils.tempoRelativo(p.ultimo_acesso_em)) : ''}</small>
         </div>
         ${SOU_ADMIN
-          ? `<select class="equipe-papel" data-papel="${esc(p.id)}" data-antes="${papel}"
-                title="O que esta pessoa pode fazer">
-               <option value="atendente"${papel === 'admin' ? '' : ' selected'}>Atendente</option>
-               <option value="admin"${papel === 'admin' ? ' selected' : ''}>Administrador</option>
+          ? `<select class="equipe-papel" data-papel="${esc(p.id)}" data-antes="${esc(papel)}"
+                title="O que esta pessoa pode fazer" aria-label="Função de ${esc(p.nome)}">
+               ${CrmUtils.PAPEIS.map(x => `<option value="${x}"${x === papel ? ' selected' : ''}>${esc(LABEL_PAPEL[x])}</option>`).join('')}
              </select>`
           : `<span class="equipe-papel-txt">${esc(LABEL_PAPEL[papel])}</span>`}
         ${SOU_ADMIN && p.id !== r.meuId
@@ -960,7 +979,7 @@ async function carregarEquipe() {
       try {
         await api('/api/equipe/papel', { method: 'POST',
           body: JSON.stringify({ id: s.dataset.papel, papel: s.value }) });
-        toast(s.value === 'admin' ? '✅ Agora é administrador' : '✅ Agora é atendente');
+        toast('✅ Agora é ' + (LABEL_PAPEL[s.value] || s.value).toLowerCase());
         // mudar o próprio papel muda o que a tela mostra: recarrega tudo
         if (s.dataset.papel === r.meuId) { location.reload(); return; }
         await carregarEquipe();
@@ -999,12 +1018,14 @@ $('#formPerfil').addEventListener('submit', async e => {
     msg.hidden = false;
   };
   if (!nome) return mostrar('Escreva o seu nome.', false);
+  const tel = $('#perfilTelefone').value.trim();
+  if (tel && !U.telE164(tel)) return mostrar('Telefone com DDD, ex.: (12) 99999-0000.', false);
 
   btn.disabled = true;
   try {
-    await api('/api/perfil', { method: 'PATCH', body: JSON.stringify({ nome }) });
-    if (PERFIL) PERFIL.nome = nome;
-    mostrar('✅ Nome salvo.', true);
+    await salvarMeuPerfil({ nome, cargo: $('#perfilCargo').value.trim().slice(0, 60), telefone: tel ? U.telE164(tel) : null,
+      avatar_cor: $('input[name=corAvatar]:checked')?.value || null });
+    mostrar('✅ Perfil salvo.', true);
     toast('✅ Perfil salvo');
     await carregarEquipe();
   } catch (err) {
@@ -1023,8 +1044,8 @@ $('#formSenha').addEventListener('submit', async e => {
     msg.className = 'form-msg ' + (ok ? 'ok' : 'erro');
     msg.hidden = false;
   };
-  if (s1.length < 8) return mostrar('A senha precisa ter pelo menos 8 caracteres.', false);
-  if (s1 !== s2)     return mostrar('As duas senhas não são iguais. Confira e tente de novo.', false);
+  const falha = CrmUtils.validarNovaSenha(s1, s2, PERFIL?.email);
+  if (falha) return mostrar(falha, false);
   if (!sb)           return mostrar('Conexão com o Supabase não configurada.', false);
 
   btn.disabled = true; btn.textContent = 'Trocando…';
@@ -1035,7 +1056,7 @@ $('#formSenha').addEventListener('submit', async e => {
     mostrar('✅ Senha trocada. Use a nova da próxima vez que entrar.', true);
     toast('✅ Senha alterada com sucesso');
   } catch (err) {
-    mostrar('⚠️ Não consegui trocar: ' + (err.message || 'erro desconhecido'), false);
+    mostrar('⚠️ ' + CrmUtils.mensagemLogin(err), false);
   } finally {
     btn.disabled = false; btn.textContent = 'Trocar senha';
   }
@@ -1067,46 +1088,9 @@ $('#formNovoMembro').addEventListener('submit', async e => {
 });
 
 /* ============================================================
-   LOGIN — nada do CRM aparece antes de entrar
+   LOGIN, sessão, perfil, sino e tarefas ficam em acesso.js (rodada 3):
+   mostrarLogin, esconderLogin, telaAcesso, o formulário de entrar e o boot.
    ============================================================ */
-function mostrarLogin(mensagem) {
-  document.body.classList.add('deslogado');
-  $('#telaLogin').hidden = false;
-  const erro = $('#erroLogin');
-  // recado de login só se lê no formulário de login: traz ele de volta
-  if (mensagem) { mostrarFormPrimeiro(false); erro.textContent = mensagem; erro.hidden = false; }
-  else { erro.hidden = true; }
-}
-
-function esconderLogin() {
-  document.body.classList.remove('deslogado');
-  $('#telaLogin').hidden = true;
-  $('#erroLogin').hidden = true;
-}
-
-$('#formLogin').addEventListener('submit', async e => {
-  e.preventDefault();
-  const f = e.target, btn = $('#btnEntrar');
-  btn.disabled = true; btn.textContent = 'ENTRANDO…';
-  try {
-    if (!sb) throw new Error('Conexão com o Supabase não configurada.');
-    const { error } = await sb.auth.signInWithPassword({
-      email: f.loginEmail.value.trim(),
-      password: f.loginSenha.value,
-    });
-    if (error) {
-      throw new Error(/invalid login/i.test(error.message)
-        ? 'E-mail ou senha incorretos.' : error.message);
-    }
-    f.loginSenha.value = '';
-    esconderLogin();
-    await carregar();
-  } catch (err) {
-    mostrarLogin(err.message);
-  } finally {
-    btn.disabled = false; btn.textContent = 'ENTRAR';
-  }
-});
 
 /* ============================================================
    PRIMEIRO ACESSO — a conta do dono, antes de existir alguém
@@ -1117,10 +1101,7 @@ $('#formLogin').addEventListener('submit', async e => {
    endereço de domínio próprio ("Email address is invalid"). Quem cria
    é o servidor, com a chave de serviço, e a conta já entra valendo.
    ============================================================ */
-function mostrarFormPrimeiro(mostrar) {
-  $('#formLogin').hidden    = mostrar;
-  $('#formPrimeiro').hidden = !mostrar;
-}
+function mostrarFormPrimeiro(mostrar) { telaAcesso(mostrar ? 'formPrimeiro' : 'formLogin'); }
 
 async function verPrimeiroAcesso() {
   try {
@@ -1167,8 +1148,7 @@ $('#formPrimeiro').addEventListener('submit', async e => {
       return;
     }
     $('#pnSenha').value = ''; $('#pnSenha2').value = '';
-    esconderLogin();
-    await carregar();
+    await entrarDepoisDoLogin();
   } catch (err) {
     falha(err.message);
   } finally {
@@ -1176,31 +1156,3 @@ $('#formPrimeiro').addEventListener('submit', async e => {
   }
 });
 
-/* ---------------- Boot ---------------- */
-(async function iniciar() {
-  mostrarLogin();                       // capa primeiro: nada vaza antes da senha
-  try {
-    CONFIG = await (await fetch('/api/config')).json();
-  } catch {
-    return mostrarLogin('Não consegui falar com o servidor. Ele está rodando?');
-  }
-  if (!CONFIG.configurado) {
-    return mostrarLogin('Falta configurar o Supabase no servidor (SUPABASE_URL, '
-      + 'SUPABASE_ANON_KEY e SUPABASE_SERVICE_ROLE_KEY).');
-  }
-  if (!window.supabase?.createClient) {
-    return mostrarLogin('A biblioteca do Supabase não carregou. Verifique sua conexão.');
-  }
-  sb = window.supabase.createClient(CONFIG.supabaseUrl, CONFIG.supabaseAnonKey);
-
-  // já estava logado? entra direto
-  const { data } = await sb.auth.getSession();
-  if (data?.session) {
-    esconderLogin();
-    try { await carregar(); }
-    catch (err) { mostrarLogin(err.message); }
-  } else {
-    // ninguém logado: pode ser a primeira vez que o sistema abre
-    await verPrimeiroAcesso();
-  }
-})();

@@ -68,6 +68,10 @@
       <svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 17.93V16h-2v3.93A8.01 8.01 0 014.07 13H8v-2H4.07A8.01 8.01 0 0111 4.07V8h2V4.07A8.01 8.01 0 0119.93 11H16v2h3.93A8.01 8.01 0 0113 19.93z" fill="currentColor"/></svg>
       <span>Origem dos Leads</span>
     </button>
+    <button class="nav-item" data-view="equipe" hidden>
+      <svg viewBox="0 0 24 24"><path d="M7 21H3v-8h4v8zm7 0h-4V3h4v18zm7 0h-4V9h4v12z" fill="currentColor"/></svg>
+      <span>Equipe e metas</span>
+    </button>
     <button class="nav-item" data-view="servicos">
       <svg viewBox="0 0 24 24"><path d="M22.7 19l-9.1-9.1a5.5 5.5 0 00-7.1-7.1l3.9 3.9-2.8 2.8-3.9-3.9a5.5 5.5 0 007.1 7.1l9.1 9.1a1 1 0 001.4 0l1.4-1.4a1 1 0 000-1.4z" fill="currentColor"/></svg>
       <span>Serviços</span>
@@ -111,6 +115,37 @@
         <input aria-label="Buscar leads" id="search" type="search" placeholder="Buscar nome, telefone, placa, carro…" />
       </div>
       <button class="btn btn-primary" id="btnNovo">+ Novo Lead</button>
+      <div class="topo-icones">
+        <div class="ancora">
+          <button type="button" class="icone-btn" id="btnSino" aria-label="Notificações" aria-expanded="false" aria-controls="painelSino">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22a2.5 2.5 0 002.45-2h-4.9A2.5 2.5 0 0012 22zm7-6V11a7 7 0 00-5.5-6.84V3.5a1.5 1.5 0 00-3 0v.66A7 7 0 005 11v5l-2 2v1h18v-1l-2-2z" fill="currentColor"/></svg>
+            <span class="sino-qtd" id="sinoQtd" hidden></span>
+          </button>
+          <div class="pop pop-direita sino-pop" id="painelSino" role="region" aria-label="Notificações" hidden>
+            <div class="sino-topo"><strong>Notificações</strong><button type="button" class="btn btn-ghost sm" id="sinoTodas">Marcar todas como lidas</button></div>
+            <ul class="sino-lista" id="sinoLista" aria-live="polite"></ul>
+            <p class="sino-pe" id="sinoPe"></p>
+          </div>
+        </div>
+        <div class="ancora">
+          <button type="button" class="avatar-btn" id="btnPerfil" aria-haspopup="menu" aria-expanded="false" aria-controls="menuPerfil" aria-label="Menu do perfil">
+            <span class="avatar mini" id="perfilAvatar" aria-hidden="true">?</span>
+          </button>
+          <div class="pop pop-direita menu-perfil" id="menuPerfil" role="menu" aria-label="Perfil" hidden>
+            <div class="mp-topo" role="presentation"><span class="avatar" id="mpAvatar" aria-hidden="true">?</span>
+              <div><strong id="mpNome">—</strong><small id="mpEmail"></small><small id="mpPapel"></small></div></div>
+            <button type="button" role="menuitem" data-mp="perfil"><span aria-hidden="true">👤</span>Meu perfil</button>
+            <button type="button" role="menuitem" data-mp="senha"><span aria-hidden="true">🔑</span>Trocar senha</button>
+            <button type="button" role="menuitem" data-mp="mfa"><span aria-hidden="true">🛡️</span>Verificação em duas etapas</button>
+            <button type="button" role="menuitem" data-mp="notif"><span aria-hidden="true">🔔</span>Preferências de notificação</button>
+            <button type="button" role="menuitem" data-mp="tarefas"><span aria-hidden="true">✅</span>Minhas tarefas</button>
+            <button type="button" role="menuitem" data-mp="tema"><span aria-hidden="true">🌓</span>Trocar tema</button>
+            <hr role="separator" />
+            <button type="button" role="menuitem" data-mp="sair"><span aria-hidden="true">↩</span>Sair</button>
+            <button type="button" role="menuitem" data-mp="sairTodos" class="mp-perigo"><span aria-hidden="true">⏏</span>Sair de todos os aparelhos</button>
+          </div>
+        </div>
+      </div>
     </div>
   </header>
 
@@ -136,8 +171,8 @@
     <div class="kpis" id="kpis"></div>
     <div class="grid-2">
       <div class="card">
-        <div class="card-topo"><h3>Metas do mês</h3><button type="button" class="btn btn-ghost sm" id="btnMetas">Definir metas</button></div>
-        <div id="metasMes"></div>
+        <div class="card-topo"><h3>Metas do mês</h3><button type="button" class="btn btn-ghost sm" id="btnMetas" hidden>Definir metas</button></div>
+        <div id="metasMes" aria-live="polite"></div>
       </div>
       <div class="card">
         <div class="card-topo"><h3>Precisam de atenção</h3><span class="filter-count" id="paradosCount"></span></div>
@@ -145,13 +180,26 @@
       </div>
     </div>
     <div class="grid-2">
-      <div class="card">
-        <div class="card-topo"><h3>Meus lembretes</h3><span class="nota-local" title="Os lembretes ficam guardados neste navegador, separados por usuário. Não aparecem em outro aparelho.">só neste aparelho</span></div>
+      <div class="card" id="cardTarefas">
+        <div class="card-topo"><h3>Minhas tarefas</h3><span class="filter-count" id="tarefasResumo" aria-live="polite"></span></div>
+        <div class="importar-lembretes" id="importarLembretes" role="region" aria-label="Lembretes antigos" hidden>
+          <p id="importarTxt"></p>
+          <div><button type="button" class="btn btn-primary sm" id="btnImportar">Importar</button>
+            <button type="button" class="btn btn-ghost sm" id="btnImportarNao">Agora não</button></div>
+        </div>
         <form class="tarefa-form" id="formTarefaPainel">
-          <input id="tarefaTexto" maxlength="200" placeholder="Ex.: ligar para o João às 14h" aria-label="Novo lembrete" />
-          <input id="tarefaData" type="date" aria-label="Para quando" />
+          <input id="tarefaTexto" maxlength="200" placeholder="Ex.: ligar para o João" aria-label="Nova tarefa" required />
+          <input id="tarefaData" type="date" aria-label="Dia" />
+          <input id="tarefaHora" type="time" aria-label="Hora" step="900" />
+          <select id="tarefaPrioridade" aria-label="Prioridade"><option value="2">Normal</option><option value="3">Urgente</option><option value="1">Baixa</option></select>
+          <select id="tarefaPara" aria-label="Para quem" hidden></select>
           <button class="btn btn-primary sm" type="submit">Adicionar</button>
         </form>
+        <div class="tarefa-filtro pilulas" id="tarefaFiltro" role="group" aria-label="Mostrar">
+          <button type="button" class="filtro-pill ativo" data-tf="minhas" aria-pressed="true">Minhas</button>
+          <button type="button" class="filtro-pill" data-tf="criei" aria-pressed="false">Que passei</button>
+          <button type="button" class="filtro-pill" data-tf="equipe" aria-pressed="false" hidden>Equipe</button>
+        </div>
         <div id="tarefasPainel" class="tarefas"></div>
       </div>
       <div class="card">
@@ -180,6 +228,7 @@
     <div class="filters">
       <select id="fStatus" aria-label="Filtrar por etapa"><option value="">Todos os status</option></select>
       <select id="fOrigem" aria-label="Filtrar por origem"><option value="">Todas as origens</option></select>
+      <select id="fResp" class="f-resp" aria-label="Filtrar por responsável"><option value="">Todos os responsáveis</option></select>
       <label>Ordenar <select id="ordemLeads"><option value="recente">Mais recentes</option><option value="nome">Nome A–Z</option><option value="valor">Maior valor</option><option value="antigo">Mais antigos</option><option value="parado">Mais tempo parado</option></select></label>
       <label class="chk-pill"><input type="checkbox" id="soParados" /> Só parados</label>
       <button class="btn btn-ghost sm" id="limparFiltros" type="button">Limpar filtros</button><button class="btn btn-ghost sm" id="exportarLeads" type="button">Exportar CSV</button>
@@ -193,6 +242,7 @@
       <strong id="loteQtd"></strong>
       <select id="loteStatus" aria-label="Mudar etapa dos selecionados"><option value="">Mudar etapa…</option></select>
       <select id="loteOrigem" aria-label="Atribuir origem aos selecionados"><option value="">Atribuir origem…</option></select>
+      <select id="loteResp" aria-label="Passar os selecionados para"><option value="">Passar para…</option></select>
       <button class="btn btn-ghost sm" id="loteExportar" type="button">Exportar seleção</button>
       <button class="btn btn-ghost sm" id="loteLimpar" type="button">Limpar seleção</button>
     </div>
@@ -223,6 +273,7 @@
   <section class="view" id="view-pipeline">
     <div class="kb-barra">
       <p class="kb-dica">Arraste os cartões entre as etapas. No teclado: foco no cartão e <kbd>Shift</kbd> + <kbd>←</kbd> <kbd>→</kbd>.</p>
+      <select id="fRespFunil" class="f-resp" aria-label="Funil de qual responsável"><option value="">Todos os responsáveis</option></select>
       <span class="filter-count" id="kbResumo" aria-live="polite"></span>
     </div>
     <div class="kanban" id="kanban"></div>
@@ -239,6 +290,42 @@
     <div class="card">
       <h3>Como rastrear Meta e Google automaticamente</h3>
       <div class="howto" id="howto"></div>
+    </div>
+  </section>
+
+  <!-- ---------- EQUIPE E METAS (gestor/admin) ---------- -->
+  <section class="view" id="view-equipe">
+    <div class="periodo-barra">
+      <label class="eq-mes">Mês <input type="month" id="eqMes" /></label>
+      <div class="pilulas" id="eqPeriodo" role="group" aria-label="Período do ranking">
+        <button type="button" class="filtro-pill ativo" data-eqp="mes" aria-pressed="true">Mês escolhido</button>
+        <button type="button" class="filtro-pill" data-eqp="30" aria-pressed="false">30 dias</button>
+        <button type="button" class="filtro-pill" data-eqp="7" aria-pressed="false">7 dias</button>
+      </div>
+      <span class="filter-count" id="eqTxt" aria-live="polite"></span>
+    </div>
+    <div class="card">
+      <div class="card-topo"><h3>Meta da loja</h3><span class="filter-count" id="eqLojaTxt"></span></div>
+      <div class="metas-grade" id="eqMetaLoja"></div>
+    </div>
+    <div class="card">
+      <div class="card-topo"><h3>Ranking da equipe</h3>
+        <label class="eq-criterio">Ordenar por <select id="eqCriterio">
+          <option value="faturamento">Faturamento</option><option value="vendas">Vendas</option><option value="conversao">Conversão</option>
+          <option value="agendados">Agendados</option><option value="leads">Leads</option><option value="tempo_resposta_min">Tempo de resposta</option>
+        </select></label></div>
+      <figure class="ranking" id="eqRanking" aria-labelledby="eqRankingT"><figcaption class="sr" id="eqRankingT">Ranking por faturamento</figcaption><div id="eqBarras"></div></figure>
+      <div class="table-wrap"><table class="table" id="tblDesempenho"></table></div>
+    </div>
+    <div class="card">
+      <div class="card-topo"><h3>Metas por pessoa</h3><button type="button" class="btn btn-primary sm" id="eqSalvar">Salvar metas do mês</button></div>
+      <p class="card-sub">Deixe zero para não cobrar aquele número. A meta da loja fica na primeira linha.</p>
+      <form id="formMetasEquipe"><div class="table-wrap"><table class="table metas-tabela" id="tblMetasEquipe"></table></div></form>
+      <p class="form-msg" id="eqMsg" role="status" hidden></p>
+    </div>
+    <div class="card">
+      <div class="card-topo"><h3>Funil por responsável</h3><span class="filter-count">leads de agora, por etapa</span></div>
+      <div class="table-wrap"><table class="table" id="tblFunilResp"></table></div>
     </div>
   </section>
 
@@ -428,8 +515,12 @@
             função só o administrador altera.</p>
           <form id="formPerfil" class="form-vertical">
             <label>Nome<input id="perfilNome" maxlength="80" placeholder="Seu nome" autocomplete="name" /></label>
+            <label>Cargo<input id="perfilCargo" maxlength="60" placeholder="Ex.: consultor de vendas" autocomplete="organization-title" /></label>
+            <label>Telefone<input id="perfilTelefone" type="tel" inputmode="tel" maxlength="20" placeholder="(12) 9 9999-9999" autocomplete="tel" /></label>
+            <fieldset class="cores-avatar" id="perfilCores"><legend>Cor do avatar</legend></fieldset>
             <label>E-mail<input id="perfilEmail" disabled /></label>
             <label>Função<input id="perfilPapel" disabled /></label>
+            <p class="muted mini-nota" id="perfilAcesso"></p>
             <div class="int-actions">
               <div class="spacer"></div>
               <button type="submit" class="btn btn-primary sm" id="btnSalvarPerfil">Salvar</button>
@@ -444,12 +535,12 @@
             seu acesso — e ela serve para o CRM, a Agenda e o Atendimento.</p>
           <form id="formSenha" class="form-vertical">
             <label>Nova senha
-              <input id="senhaNova" type="password" minlength="8" autocomplete="new-password"
-                     placeholder="pelo menos 8 caracteres" />
+              <span class="senha-campo"><input id="senhaNova" type="password" minlength="8" autocomplete="new-password"
+                     placeholder="pelo menos 8 caracteres" /><button type="button" class="ver-senha" aria-label="Mostrar senha" aria-pressed="false">👁</button></span>
             </label>
             <label>Repetir a nova senha
-              <input id="senhaNova2" type="password" minlength="8" autocomplete="new-password"
-                     placeholder="digite a mesma senha" />
+              <span class="senha-campo"><input id="senhaNova2" type="password" minlength="8" autocomplete="new-password"
+                     placeholder="digite a mesma senha" /><button type="button" class="ver-senha" aria-label="Mostrar senha" aria-pressed="false">👁</button></span>
             </label>
             <div class="int-actions">
               <div class="spacer"></div>
@@ -457,6 +548,35 @@
             </div>
             <p class="form-msg" id="senhaMsg" hidden></p>
           </form>
+        </div>
+
+        <div class="card" id="cardMfa">
+          <h3>Verificação em duas etapas</h3>
+          <p class="card-sub">Além da senha, pede um código de 6 números do app autenticador do celular
+            (Google Authenticator, Microsoft Authenticator, Authy…). Opcional, e vale para todos os apps da IndyCar.</p>
+          <div id="mfaBox" aria-live="polite"></div>
+        </div>
+
+        <div class="card" id="cardNotif">
+          <h3>Notificações</h3>
+          <p class="card-sub">O sino no topo mostra o que chegou para você: tarefas, leads e conversas passadas, cliente esperando.</p>
+          <form id="formNotif" class="form-vertical">
+            <label class="chk"><input type="checkbox" id="notifToast" checked /> Mostrar aviso na tela quando chegar uma nova</label>
+            <label class="chk"><input type="checkbox" id="notifSom" /> Tocar um bipe curto</label>
+            <label class="chk"><input type="checkbox" id="notifTitulo" checked /> Mostrar o número de não lidas na aba do navegador</label>
+            <div class="int-actions"><div class="spacer"></div><button type="submit" class="btn btn-primary sm">Salvar preferências</button></div>
+            <p class="form-msg" id="notifMsg" role="status" hidden></p>
+          </form>
+        </div>
+
+        <div class="card" id="cardSessao">
+          <h3>Sessão</h3>
+          <p class="card-sub" id="sessaoTxt">Você está conectado neste aparelho.</p>
+          <div class="int-actions">
+            <button type="button" class="btn btn-ghost sm" id="btnSair">Sair</button>
+            <div class="spacer"></div>
+            <button type="button" class="btn btn-ghost sm mp-perigo" id="btnSairTodos">Sair de todos os aparelhos</button>
+          </div>
         </div>
       </div>
     </div>
@@ -490,6 +610,7 @@
               <label>Função
                 <select name="papel">
                   <option value="atendente">Atendente — vê leads, funil, clientes e agenda</option>
+                  <option value="gestor">Gestor — também vê a equipe, define metas e apaga leads</option>
                   <option value="admin">Administrador — também mexe no catálogo, nas integrações e na equipe</option>
                 </select>
               </label>
@@ -521,23 +642,31 @@
     <h3 id="modalTitle">Novo Lead</h3>
     <div id="leadFicha" hidden>
       <div class="lf-topo" id="lfTopo"></div>
+      <div class="lf-resp" id="lfResp"></div>
       <div class="lf-acoes" id="lfAcoes"></div>
       <section id="iaSlotLead" class="ia-slot" aria-label="IA"></section>
       <div class="lf-etapas" id="lfEtapas" role="group" aria-label="Mudar etapa"></div>
       <div class="lf-abas" role="tablist" aria-label="Partes da ficha">
         <button type="button" role="tab" id="abaTl" aria-controls="painelTl" aria-selected="true">Linha do tempo</button>
         <button type="button" role="tab" id="abaDados" aria-controls="painelDados" aria-selected="false" tabindex="-1">Dados</button>
-        <button type="button" role="tab" id="abaLembretes" aria-controls="painelLembretes" aria-selected="false" tabindex="-1">Lembretes <span id="lfQtdLembretes"></span></button>
+        <button type="button" role="tab" id="abaLembretes" aria-controls="painelLembretes" aria-selected="false" tabindex="-1">Tarefas <span id="lfQtdLembretes" class="aba-qtd"></span></button>
       </div>
       <div role="tabpanel" id="painelTl" aria-labelledby="abaTl" class="lf-painel"><ol class="linha-tempo" id="linhaTempo"></ol></div>
       <div role="tabpanel" id="painelLembretes" aria-labelledby="abaLembretes" class="lf-painel" hidden>
         <form class="tarefa-form" id="formTarefaLead">
-          <input id="tarefaLeadTexto" maxlength="200" placeholder="Ex.: retornar com o orçamento" aria-label="Novo lembrete para este lead" />
-          <input id="tarefaLeadData" type="date" aria-label="Para quando" />
-          <button class="btn btn-primary sm" type="submit">Adicionar</button>
+          <input id="tarefaLeadTexto" maxlength="200" placeholder="Ex.: retornar com o orçamento" aria-label="Nova tarefa para este lead" required />
+          <input id="tarefaLeadData" type="date" aria-label="Dia" />
+          <input id="tarefaLeadHora" type="time" aria-label="Hora" step="900" />
+          <select id="tarefaLeadPara" aria-label="Para quem"></select>
+          <button class="btn btn-primary sm" type="submit">Criar tarefa</button>
         </form>
+        <div class="atalhos-tarefa" id="atalhosTarefa" role="group" aria-label="Tarefas rápidas">
+          <button type="button" class="filtro-pill" data-rapida="Ligar para o cliente" data-dias="0">📞 Ligar hoje</button>
+          <button type="button" class="filtro-pill" data-rapida="Cobrar resposta do orçamento" data-dias="1">🧾 Cobrar orçamento amanhã</button>
+          <button type="button" class="filtro-pill" data-rapida="Confirmar o horário com o cliente" data-dias="1">📅 Confirmar horário</button>
+          <button type="button" class="filtro-pill" data-rapida="Pós-venda: perguntar como ficou o carro" data-dias="3">⭐ Pós-venda em 3 dias</button>
+        </div>
         <div id="tarefasLead" class="tarefas"></div>
-        <p class="nota-local">Lembretes ficam só neste aparelho, separados por usuário.</p>
       </div>
     </div>
     <div role="tabpanel" id="painelDados" aria-labelledby="abaDados" class="lf-painel">
@@ -607,16 +736,6 @@
   </form>
 </dialog>
 
-<dialog class="dlg" id="dlgMetas" aria-labelledby="dlgMetasT">
-  <form method="dialog" id="formMetas">
-    <h3 id="dlgMetasT">Metas do mês</h3>
-    <label>Faturamento (R$)<input id="metaFat" type="number" min="0" max="10000000" step="100" inputmode="decimal" /></label>
-    <label>Serviços fechados<input id="metaFech" type="number" min="0" max="10000" step="1" inputmode="numeric" /></label>
-    <label>Leads novos<input id="metaLeads" type="number" min="0" max="100000" step="1" inputmode="numeric" /></label>
-    <p class="nota-local">As metas ficam guardadas neste aparelho.</p>
-    <div class="modal-actions"><button type="button" class="btn btn-ghost" data-fechar>Cancelar</button><div class="spacer"></div><button type="submit" class="btn btn-primary">Salvar metas</button></div>
-  </form>
-</dialog>
 
 <dialog class="dlg" id="dlgAtalhos" aria-labelledby="dlgAtalhosT">
   <h3 id="dlgAtalhosT">Atalhos de teclado</h3>
@@ -628,6 +747,8 @@
     <dt><kbd>G</kbd> <kbd>F</kbd></dt><dd>Funil</dd>
     <dt><kbd>G</kbd> <kbd>C</kbd></dt><dd>Clientes</dd>
     <dt><kbd>G</kbd> <kbd>I</kbd></dt><dd>IA</dd>
+    <dt><kbd>G</kbd> <kbd>E</kbd></dt><dd>Equipe e metas (gestor)</dd>
+    <dt><kbd>G</kbd> <kbd>T</kbd></dt><dd>Minhas tarefas</dd>
     <dt><kbd>Shift</kbd> <kbd>←</kbd> <kbd>→</kbd></dt><dd>Mover o cartão do funil de etapa</dd>
     <dt><kbd>Enter</kbd></dt><dd>Abrir o lead em foco</dd>
     <dt><kbd>Esc</kbd></dt><dd>Fechar janela</dd>
@@ -645,15 +766,66 @@
     <h1>CRM</h1>
     <p class="login-sub">Entre com o mesmo e-mail e senha do atendimento.</p>
     <label>E-mail
-      <input name="loginEmail" type="email" required autocomplete="username" placeholder="voce@indycartaubate.com" />
+      <input name="loginEmail" id="loginEmail" type="email" required autocomplete="username" placeholder="voce@indycartaubate.com" />
     </label>
     <label>Senha
-      <input name="loginSenha" type="password" required autocomplete="current-password" placeholder="••••••••" />
+      <span class="senha-campo"><input name="loginSenha" id="loginSenha" type="password" required autocomplete="current-password" placeholder="••••••••" aria-describedby="capsLogin" /><button type="button" class="ver-senha" aria-label="Mostrar senha" aria-pressed="false">👁</button></span>
     </label>
+    <p class="caps-aviso" id="capsLogin" role="status" hidden>⇪ Caps Lock está ligado</p>
+    <label class="chk login-lembrar"><input type="checkbox" id="lembrarEmail" /> Lembrar meu e-mail neste aparelho</label>
     <button type="submit" class="btn-entrar" id="btnEntrar">ENTRAR</button>
-    <p class="login-erro" id="erroLogin" hidden></p>
+    <p class="login-erro" id="erroLogin" role="alert" hidden></p>
+    <p class="login-ok" id="okLogin" role="status" hidden></p>
+    <button type="button" class="login-link" id="btnEsqueci">Esqueci a senha</button>
     <button type="button" class="login-link" id="btnCriarConta" hidden>Primeiro acesso? Criar minha conta</button>
   </form>
+
+  <!-- Esqueci a senha: o Supabase manda um link; ao voltar, abre a tela de senha nova. -->
+  <form id="formEsqueci" class="login-caixa" novalidate hidden>
+    <span class="brand-mark login-marca"><span class="bm-indy">INDY</span><span class="bm-car">CAR</span></span>
+    <h1 class="login-titulo-2">Esqueci a senha</h1>
+    <p class="login-sub">Digite o seu e-mail. Mandamos um link para você criar uma senha nova.</p>
+    <label>E-mail<input id="esqEmail" type="email" required autocomplete="username" placeholder="voce@indycartaubate.com" /></label>
+    <button type="submit" class="btn-entrar" id="btnEsqEnviar">ENVIAR LINK</button>
+    <p class="login-erro" id="esqErro" role="alert" hidden></p>
+    <p class="login-ok" id="esqOk" role="status" hidden></p>
+    <p class="login-nota">O plano gratuito do servidor de e-mail envia poucos e-mails por hora. Se não chegar em alguns minutos
+      (olhe também o spam), peça ao administrador uma <strong>senha temporária</strong>.</p>
+    <button type="button" class="login-link" data-voltar-login>Voltar para entrar</button>
+  </form>
+
+  <!-- Senha nova: depois do link do e-mail ou quando a senha é provisória -->
+  <form id="formNovaSenha" class="login-caixa" novalidate hidden>
+    <span class="brand-mark login-marca"><span class="bm-indy">INDY</span><span class="bm-car">CAR</span></span>
+    <h1 class="login-titulo-2" id="nsTitulo">Crie uma senha nova</h1>
+    <p class="login-sub" id="nsSub">Pelo menos 8 caracteres, diferente do seu e-mail.</p>
+    <label>Senha nova<span class="senha-campo"><input id="nsSenha" type="password" required minlength="8" autocomplete="new-password" /><button type="button" class="ver-senha" aria-label="Mostrar senha" aria-pressed="false">👁</button></span></label>
+    <label>Repita a senha<span class="senha-campo"><input id="nsSenha2" type="password" required minlength="8" autocomplete="new-password" /><button type="button" class="ver-senha" aria-label="Mostrar senha" aria-pressed="false">👁</button></span></label>
+    <p class="caps-aviso" id="capsNs" role="status" hidden>⇪ Caps Lock está ligado</p>
+    <button type="submit" class="btn-entrar" id="btnNsSalvar">SALVAR SENHA</button>
+    <p class="login-erro" id="nsErro" role="alert" hidden></p>
+    <button type="button" class="login-link" data-sair-login>Sair</button>
+  </form>
+
+  <!-- Duas etapas: código do app autenticador depois da senha -->
+  <form id="formMfa" class="login-caixa" novalidate hidden>
+    <span class="brand-mark login-marca"><span class="bm-indy">INDY</span><span class="bm-car">CAR</span></span>
+    <h1 class="login-titulo-2">Código de verificação</h1>
+    <p class="login-sub">Abra o app autenticador do celular e digite o código de 6 números da IndyCar.</p>
+    <label>Código<input id="mfaCodigo" inputmode="numeric" autocomplete="one-time-code" maxlength="7" pattern="[0-9 ]*" required placeholder="000 000" class="codigo-mfa" /></label>
+    <button type="submit" class="btn-entrar" id="btnMfaEntrar">CONFIRMAR</button>
+    <p class="login-erro" id="mfaErro" role="alert" hidden></p>
+    <button type="button" class="login-link" data-sair-login>Entrar com outra conta</button>
+  </form>
+
+  <!-- Sem acesso a este app -->
+  <div id="caixaSemAcesso" class="login-caixa" role="region" aria-labelledby="saTitulo" hidden>
+    <span class="brand-mark login-marca"><span class="bm-indy">INDY</span><span class="bm-car">CAR</span></span>
+    <h1 class="login-titulo-2" id="saTitulo">Você não tem acesso ao CRM</h1>
+    <p class="login-sub" id="saTexto">Se precisar, peça ao administrador para liberar.</p>
+    <ul class="sa-apps" id="saApps"></ul>
+    <button type="button" class="btn-entrar" data-sair-login>SAIR</button>
+  </div>
 
   <!-- Primeiro acesso: só aparece enquanto NÃO existir ninguém cadastrado.
        Quem criar esta conta vira o administrador dos três sistemas. -->
@@ -683,10 +855,12 @@
   </form>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.0/dist/umd/supabase.min.js"></script>
 <script src="crm-utils.js"></script>
 <script src="app.js"></script>
 <script src="melhorias.js"></script>
+<script src="acesso.js"></script>
+<script src="equipe.js"></script>
 <script src="crm-ia.js"></script>
 <script>
   /* Registra o service worker — é o que torna o app instalável.

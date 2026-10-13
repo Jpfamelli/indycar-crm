@@ -26,7 +26,7 @@ $('#ordemLeads').addEventListener('change', () => { ordenarLeads(); salvarFiltro
 $('#soParados').addEventListener('change', () => { PAG_LEADS = 1; carregarLeads().catch(e => toast(e.message)); });
 $('#limparFiltros').addEventListener('click', () => { $('#fStatus').value = ''; $('#fOrigem').value = ''; $('#search').value = ''; $('#ordemLeads').value = 'recente'; $('#soParados').checked = false; PAG_LEADS = 1; carregarLeads().catch(e => toast(e.message)); });
 function baixarCsv(lista, nome) {
-  const rows = [['Nome','Telefone','Carro','Placa','Serviço','Origem','Status','Orçado','Pago','Entrada','Dias na etapa','Campanha'], ...lista.map(l => [l.nome, l.telefone, l.carro_modelo, l.placa, l.servico, LABEL_ORIGEM[l.origem] || l.origem, LABEL_STATUS[l.status] || l.status, l.valor_orcado, l.valor_pago, l.created_at, U.diasNaEtapa(l), l.utm_campaign])];
+  const rows = [['Nome','Telefone','Carro','Placa','Serviço','Origem','Status','Responsável','Orçado','Pago','Entrada','Dias na etapa','Campanha'], ...lista.map(l => [l.nome, l.telefone, l.carro_modelo, l.placa, l.servico, LABEL_ORIGEM[l.origem] || l.origem, LABEL_STATUS[l.status] || l.status, nomeResponsavel(l.responsavel_id), l.valor_orcado, l.valor_pago, l.created_at, U.diasNaEtapa(l), l.utm_campaign])];
   const url = URL.createObjectURL(new Blob([U.csv(rows)], {type: 'text/csv;charset=utf-8'}));
   const a = document.createElement('a'); a.href = url; a.download = nome + '-' + new Date().toISOString().slice(0, 10) + '.csv'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   toast(`${lista.length} lead${lista.length === 1 ? '' : 's'} exportado${lista.length === 1 ? '' : 's'}`);
@@ -112,7 +112,8 @@ function substituirLocal(novo) {
 }
 function refiltrar() {
   const st = $('#fStatus').value, og = $('#fOrigem').value, q = $('#search').value.trim(), so = $('#soParados').checked, agora = Date.now();
-  LEADS = TODOS.filter(l => (!st || l.status === st) && (!og || l.origem === og) && U.buscar(l, q) && (!so || U.parado(l, agora)));
+  const rp = $('#fResp').value, eu = PERFIL?.id;
+  LEADS = TODOS.filter(l => (!st || l.status === st) && (!og || l.origem === og) && U.filtroResponsavel(l, rp, eu) && U.buscar(l, q) && (!so || U.parado(l, agora)));
   ordenarLeads();
   for (const id of [...SEL]) if (!TODOS.some(l => String(l.id) === id)) SEL.delete(id);
 }
@@ -147,7 +148,7 @@ async function moverEtapa(id, novo, {anunciar} = {}) {
 /* ---------------- lista de leads: colunas, seleção, lote, páginas ---------------- */
 let PAG_LEADS = 1; const SEL = new Set();
 let COLUNAS = U.colunasValidas(lerLS('indycar_crm_colunas', null));
-const ROTULO_COLUNA = {cliente: 'Cliente', carro: 'Carro', servico: 'Serviço', origem: 'Origem', valor: 'Valor', status: 'Status', etapa: 'Na etapa', entrada: 'Entrada', campanha: 'Campanha'};
+const ROTULO_COLUNA = {cliente: 'Cliente', carro: 'Carro', servico: 'Serviço', origem: 'Origem', valor: 'Valor', status: 'Status', responsavel: 'Responsável', etapa: 'Na etapa', entrada: 'Entrada', campanha: 'Campanha'};
 function celula(c, l, agora) {
   switch (c) {
     case 'cliente': return `<td><div class="cell-main">${esc(l.nome)}</div><div class="cell-sub">${esc(U.formatarTelefone(l.telefone))}</div></td>`;
@@ -159,6 +160,7 @@ function celula(c, l, agora) {
     case 'etapa': { const d = U.diasNaEtapa(l, agora), p = U.parado(l, agora); return `<td class="cell-sub${p ? ' parado-txt' : ''}">${p ? '<span class="sr">Parado: </span>⚠ ' : ''}${esc(U.textoDias(d))}</td>`; }
     case 'entrada': return `<td class="cell-sub">${dt(l.created_at)}</td>`;
     case 'campanha': return `<td class="cell-sub">${esc(l.utm_campaign) || '—'}</td>`;
+    case 'responsavel': return `<td>${chipResponsavel(l.responsavel_id)}</td>`;
   }
   return '<td></td>';
 }
@@ -246,17 +248,17 @@ function cartaoKanban(l, agora) {
     <span class="kb-alca" aria-hidden="true" title="Arraste para mudar de etapa">⠿</span>
     <div class="kb-nome">${esc(l.nome)}</div>
     <div class="kb-meta">${esc(l.carro_modelo) || '—'} · ${esc(l.servico) || 'serviço n/d'}</div>
-    <div class="kb-rodape"><span class="kb-valor">${brl(U.valorLead(l))}</span><span class="kb-tempo${p ? ' alerta' : ''}" title="Tempo desde a última mudança">${p ? '⚠ ' : ''}${esc(U.textoDias(d))}</span></div>
+    <div class="kb-rodape"><span class="kb-valor">${brl(U.valorLead(l))}</span>${chipResponsavel(l.responsavel_id, true)}<span class="kb-tempo${p ? ' alerta' : ''}" title="Tempo desde a última mudança">${p ? '⚠ ' : ''}${esc(U.textoDias(d))}</span></div>
     <select class="kb-etapa" aria-label="Mover ${esc(l.nome)} para outra etapa" data-lead="${esc(l.id)}">
       ${STATUSES.map(s => `<option value="${esc(s)}" ${s === l.status ? 'selected' : ''}>${esc(LABEL_STATUS[s] ?? s)}</option>`).join('')}
     </select>
   </div>`;
 }
 function renderKanban() {
-  const busca = $('#search').value, agora = Date.now();
+  const busca = $('#search').value, agora = Date.now(), rf = $('#fRespFunil').value, eu = PERFIL?.id;
   let total = 0, parados = 0;
   $('#kanban').innerHTML = STATUSES.map(st => {
-    const its = TODOS.filter(l => l.status === st && U.buscar(l, busca));
+    const its = TODOS.filter(l => l.status === st && U.filtroResponsavel(l, rf, eu) && U.buscar(l, busca));
     const r = U.resumoColuna(its, agora); total += r.qtd; parados += r.parados;
     const mostrar = COLUNAS_ABERTAS.has(st) ? its : its.slice(0, LIMITE_CARTOES);
     return `<div class="kb-col" data-etapa="${esc(st)}" role="group" aria-label="${esc(LABEL_STATUS[st] ?? st)}: ${r.qtd} leads, ${esc(brl(r.valor))}">
@@ -419,67 +421,10 @@ $('#listaParados').addEventListener('click', e => {
   if (e.target.id === 'verParados') { $('#soParados').checked = true; $('#ordemLeads').value = 'parado'; irPara('leads'); carregarLeads().catch(x => toast(x.message)); }
 });
 
-/* metas do mês (guardadas no aparelho) */
-const META_KEY = 'indycar_crm_metas';
-function renderMetas() {
-  const m = lerLS(META_KEY, {}), P = U.periodo('mes'), r = U.metricas(TODOS, P.ini, P.fim);
-  const hoje = new Date(), diasMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0).getDate(), passados = hoje.getDate();
-  const itens = [['Faturamento', r.faturamento, Number(m.faturamento) || 0, brl], ['Serviços fechados', r.ganhos, Number(m.fechados) || 0, v => String(v)], ['Leads novos', r.entradas, Number(m.leads) || 0, v => String(v)]].filter(x => x[2] > 0);
-  if (!itens.length) { $('#metasMes').innerHTML = '<p class="vazio-curto">Defina as metas do mês para acompanhar o ritmo da equipe.</p>'; return; }
-  $('#metasMes').innerHTML = itens.map(([rot, atual, alvo, fmt]) => {
-    const pct = Math.min(100, Math.round(atual / alvo * 100)), proj = Math.round(atual / passados * diasMes);
-    const ritmo = proj >= alvo ? '<span class="up">no ritmo</span>' : `<span class="down">projeção ${fmt(proj)}</span>`;
-    return `<div class="meta"><div class="meta-topo"><span>${rot}</span><b>${fmt(atual)} <small>de ${fmt(alvo)}</small></b></div>
-      <div class="meta-barra" role="progressbar" aria-label="${rot}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><div style="width:${pct}%"></div></div>
-      <div class="meta-pe"><span>${pct}%</span>${ritmo}</div></div>`;
-  }).join('');
-}
-$('#btnMetas').addEventListener('click', async () => {
-  const m = lerLS(META_KEY, {});
-  $('#metaFat').value = m.faturamento || ''; $('#metaFech').value = m.fechados || ''; $('#metaLeads').value = m.leads || '';
-  const r = await abrirDlg($('#dlgMetas'));
-  if (r) { gravarLS(META_KEY, r); renderMetas(); toast('Metas salvas neste aparelho'); }
-});
-$('#formMetas').addEventListener('submit', e => {
-  e.preventDefault();
-  const n = id => Math.max(0, Math.min(10000000, Number($(id).value) || 0));
-  $('#dlgMetas')._ok({faturamento: n('#metaFat'), fechados: Math.round(n('#metaFech')), leads: Math.round(n('#metaLeads'))});
-});
-
-/* ---------------- lembretes do vendedor (localStorage por usuário) ---------------- */
+/* Metas do mês, tarefas (tabela tarefas) e responsável do lead: equipe.js (rodada 3).
+ Lembretes antigos guardados no aparelho (indycar_crm_tarefas_<id>) são oferecidos para importar uma vez. */
 const chaveTarefas = () => 'indycar_crm_tarefas_' + (PERFIL?.id || 'anon');
 const lerTarefas = () => { const t = lerLS(chaveTarefas(), []); return Array.isArray(t) ? t : []; };
-function gravarTarefas(t) { if (!gravarLS(chaveTarefas(), t.slice(-300))) toast('⚠️ Não consegui guardar o lembrete neste navegador.'); }
-const ROTULO_SIT = {atrasada: 'Atrasado', hoje: 'Hoje', futura: '', sem_data: '', feita: 'Feito'};
-function htmlTarefas(lista, comLead) {
-  if (!lista.length) return '<p class="vazio-curto">Nenhum lembrete. Anote o próximo passo para não esquecer.</p>';
-  return U.ordenarTarefas(lista).map(t => { const s = U.situacaoTarefa(t);
-    return `<div class="tarefa ${s}" data-tarefa="${esc(t.id)}">
-      <input type="checkbox" class="tarefa-ok" aria-label="Marcar como feito: ${esc(t.texto)}" ${t.feita ? 'checked' : ''}>
-      <span class="tarefa-txt">${esc(t.texto)}${comLead && t.leadId ? ` <button type="button" class="tarefa-lead" data-lead="${esc(t.leadId)}">${esc(t.leadNome || 'abrir lead')}</button>` : ''}</span>
-      ${t.para ? `<span class="tarefa-data">${ROTULO_SIT[s] ? `<b>${ROTULO_SIT[s]}</b> · ` : ''}${esc(dtSimples(t.para))}</span>` : ''}
-      <button type="button" class="tarefa-x" aria-label="Apagar lembrete: ${esc(t.texto)}">×</button></div>`; }).join('');
-}
-function renderTarefas() {
-  const todas = lerTarefas(), pend = todas.filter(t => !t.feita || Date.now() - Date.parse(t.feitaEm || 0) < 86400000);
-  $('#tarefasPainel').innerHTML = htmlTarefas(pend.slice(0, 40), true);
-  if (LEAD_ABERTO) { const doLead = todas.filter(t => t.leadId === String(LEAD_ABERTO)); $('#tarefasLead').innerHTML = htmlTarefas(doLead, false); $('#lfQtdLembretes').textContent = doLead.filter(t => !t.feita).length || ''; }
-  const atrasadas = todas.filter(t => U.situacaoTarefa(t) === 'atrasada' || U.situacaoTarefa(t) === 'hoje').length;
-  const nav = $('.nav-item[data-view="dashboard"]'); nav.dataset.badge = atrasadas || ''; nav.setAttribute('aria-label', 'Dashboard' + (atrasadas ? `, ${atrasadas} lembrete(s) para hoje` : ''));
-}
-function addTarefa(texto, para, lead) {
-  try { const t = U.novaTarefa({texto, para, leadId: lead?.id, leadNome: lead?.nome}); gravarTarefas([...lerTarefas(), t]); renderTarefas(); return true; }
-  catch (e) { toast('⚠️ ' + e.message); return false; }
-}
-$('#formTarefaPainel').addEventListener('submit', e => { e.preventDefault(); if (addTarefa($('#tarefaTexto').value, $('#tarefaData').value)) { $('#tarefaTexto').value = ''; $('#tarefaData').value = ''; $('#tarefaTexto').focus(); } });
-$('#formTarefaLead').addEventListener('submit', e => { e.preventDefault(); const l = TODOS.find(x => String(x.id) === String(LEAD_ABERTO)); if (addTarefa($('#tarefaLeadTexto').value, $('#tarefaLeadData').value, l)) { $('#tarefaLeadTexto').value = ''; $('#tarefaLeadData').value = ''; $('#tarefaLeadTexto').focus(); } });
-for (const alvo of ['#tarefasPainel', '#tarefasLead']) $(alvo).addEventListener('click', e => {
-  const box = e.target.closest('[data-tarefa]'); if (!box) return;
-  const id = box.dataset.tarefa, todas = lerTarefas(), t = todas.find(x => x.id === id); if (!t) return;
-  if (e.target.closest('.tarefa-lead')) return abrirModal(e.target.closest('.tarefa-lead').dataset.lead);
-  if (e.target.closest('.tarefa-x')) { gravarTarefas(todas.filter(x => x.id !== id)); renderTarefas(); toastAcao('Lembrete apagado', 'Desfazer', () => { gravarTarefas([...lerTarefas(), t]); renderTarefas(); }); return; }
-  if (e.target.classList.contains('tarefa-ok')) { t.feita = e.target.checked; t.feitaEm = t.feita ? new Date().toISOString() : null; gravarTarefas(todas); renderTarefas(); }
-});
 
 /* ---------------- ficha do lead (gaveta) ---------------- */
 let LEAD_ABERTO = null, LT_GERACAO = 0;
@@ -497,6 +442,7 @@ function renderFichaLead(l) {
     botaoAcao(U.linkLigar(l.telefone), 'Ligar', '📞') + botaoAcao(U.linkAgenda(l.telefone), 'Agendar', '📅') + botaoAcao(U.linkComunicar(l.telefone), 'Mandar mensagem', '✉️') +
     `<button type="button" class="acao" data-acao="copiar"><span aria-hidden="true">📋</span>Copiar telefone</button>` +
     (l.cliente_id ? `<button type="button" class="acao" data-acao="ficha360"><span aria-hidden="true">🪪</span>Ficha 360</button>` : '');
+  renderRespFicha(l);
   $('#lfEtapas').innerHTML = STATUSES.map(s => `<button type="button" class="etapa-btn" data-etapa="${esc(s)}" aria-pressed="${s === l.status}">${esc(LABEL_STATUS[s] ?? s)}</button>`).join('');
 }
 $('#lfAcoes').addEventListener('click', async e => {
@@ -620,7 +566,7 @@ document.addEventListener('keydown', e => {
   }
   if (aberto || /INPUT|SELECT|TEXTAREA/.test(e.target.tagName) || e.target.isContentEditable || e.ctrlKey || e.metaKey || e.altKey) return;
   const k = e.key.toLowerCase();
-  if (prefixoG && Date.now() - prefixoG < 1200 && U.ATALHOS_ABA[k]) { e.preventDefault(); prefixoG = 0; const v = U.ATALHOS_ABA[k]; if (!$(`.nav-item[data-view="${v}"]`)?.hidden) { irPara(v); $('#viewTitle').focus(); } return; }
+  if (prefixoG && Date.now() - prefixoG < 1200 && U.ATALHOS_ABA[k]) { e.preventDefault(); prefixoG = 0; const v = U.ATALHOS_ABA[k]; if (!$(`.nav-item[data-view="${v}"]`)?.hidden) { irPara(v); if (k === 't') { $('#cardTarefas').scrollIntoView({block: 'start'}); $('#tarefaTexto').focus(); } else $('#viewTitle').focus(); } return; }
   prefixoG = 0;
   if (k === 'g') { prefixoG = Date.now(); return; }
   if (e.key === '?') { e.preventDefault(); abrirAtalhos(); return; }

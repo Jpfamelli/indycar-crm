@@ -3,7 +3,11 @@
 // Uso: npm run mock  →  http://127.0.0.1:3101
 //   MOCK_LATENCIA=800        atrasa cada /api (para ver esqueletos)
 //   MOCK_IA_TESTE=arquivo.js injeta um script de teste do contrato da IA (nunca commitar)
-//   MOCK_PAPEL=atendente     muda o papel do login fictício
+//   MOCK_PAPEL=atendente     papel padrão do login fictício (a tela também aceita /?papel=)
+//   Papéis: admin, gestor, atendente, agenda, desativado, sem_app, trocar_senha, mfa, deslogado.
+//   Abra http://127.0.0.1:3101/?papel=gestor (fica num cookie). Senhas fictícias do login falso:
+//   qualquer uma entra; 'senha-errada' erra; e-mail banido@… vem desativado; código MFA 123456.
+//   Ganchos de teste: POST /__mock/notificar {titulo,link,app} e POST /__mock/tarefa {titulo}.
 //   PORT=3121                outra porta (quando a 3101 estiver ocupada)
 import http from 'node:http';
 import fs from 'node:fs';
@@ -21,6 +25,29 @@ const SOBRE = ['Teste','Fictício','Exemplo','Simulado','Demo'];
 const CARROS = ['Onix 2019','HB20 2021','Corolla 2018','Gol 2015','Civic 2020','Strada 2022','Kwid 2023','Compass 2021'];
 const SERVICOS = ['Troca de Óleo de Motor','Freios','Suspensão','Alinhamento 3D','Diagnóstico com Scanner','Embreagem','Correia Dentada'];
 const MOTIVOS = ['Achou caro','Foi em outra oficina','Sem retorno do cliente','Desistiu do serviço'];
+
+/* Equipe fictícia. A primeira pessoa é "você": o papel dela muda conforme ?papel=. */
+const EU = 'aaaaaaaa-aaaa-4aaa-8aaa-000000000001';
+const EQUIPE_BASE = [
+  {id: EU, nome: 'Equipe de teste', email: 'teste@exemplo.invalid', papel: 'admin', apps: ['atendimento','crm','agenda','comunicar','orcador','ads'], cargo: 'Consultor (fictício)'},
+  {id: 'aaaaaaaa-aaaa-4aaa-8aaa-000000000002', nome: 'Bruno Vendas Fictício', email: 'bruno@exemplo.invalid', papel: 'atendente', apps: ['atendimento','crm']},
+  {id: 'aaaaaaaa-aaaa-4aaa-8aaa-000000000003', nome: 'Carla Consultora Fictícia', email: 'carla@exemplo.invalid', papel: 'atendente', apps: ['atendimento','crm'], avatar_cor: '#a855f7'},
+  {id: 'aaaaaaaa-aaaa-4aaa-8aaa-000000000004', nome: 'Diego Gestor Fictício', email: 'diego@exemplo.invalid', papel: 'gestor', apps: ['atendimento','crm','agenda','comunicar']},
+  {id: 'aaaaaaaa-aaaa-4aaa-8aaa-000000000005', nome: 'Franklin Agenda Fictício', email: 'franklin@exemplo.invalid', papel: 'agenda', apps: ['agenda']},
+];
+/* Como cada papel de teste aparece para a tela e para o servidor. */
+const PAPEIS_MOCK = {
+  admin: {papel: 'admin'},
+  gestor: {papel: 'gestor', apps: ['atendimento','crm','agenda','comunicar']},
+  atendente: {papel: 'atendente', apps: ['atendimento','crm']},
+  agenda: {papel: 'agenda', apps: ['agenda']},
+  desativado: {papel: 'atendente', apps: ['atendimento','crm'], ativo: false},
+  sem_app: {papel: 'atendente', apps: ['atendimento','comunicar']},
+  trocar_senha: {papel: 'atendente', apps: ['atendimento','crm'], precisa_trocar_senha: true},
+  mfa: {papel: 'gestor', apps: ['atendimento','crm']},
+  deslogado: {papel: 'atendente', apps: ['atendimento','crm']},
+};
+const EH_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function gerarDados(agora = Date.now()) {
   const r = rng(42), pick = a => a[Math.floor(r() * a.length)];
@@ -45,19 +72,138 @@ function gerarDados(agora = Date.now()) {
       valor_orcado: orc, valor_pago: st === 'concluido' ? orc || 180 : 0, utm_campaign: r() < .3 ? 'campanha-teste' : '',
       observacoes: st === 'perdido' && r() < .75 ? 'Motivo da perda: ' + pick(MOTIVOS) : '',
       created_at: new Date(criado).toISOString(), updated_at: new Date(mexido).toISOString(),
-      closed_at: ['concluido','perdido'].includes(st) ? new Date(mexido).toISOString() : null};
+      closed_at: ['concluido','perdido'].includes(st) ? new Date(mexido).toISOString() : null,
+      // responsável: quatro pessoas da equipe fictícia em rodízio e um em cada cinco sem ninguém
+      responsavel_id: i % 5 === 4 ? null : EQUIPE_BASE[i % 4].id};
     leads.push(l);
   }
   leads.sort((a, b) => b.created_at.localeCompare(a.created_at));
   return {clientes, leads};
 }
 
-const auth = `window.supabase={createClient:()=>({auth:{getSession:async()=>({data:{session:{access_token:'ficticio'}}}),signOut:async()=>({}),onAuthStateChange:()=>({data:{subscription:{unsubscribe(){}}}})}})};`;
+const SB_FALSO = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'mock-supabase.js'), 'utf8');
+
 const tipos = {'.html':'text/html;charset=utf-8','.js':'text/javascript;charset=utf-8','.mjs':'text/javascript;charset=utf-8','.css':'text/css;charset=utf-8','.json':'application/json','.png':'image/png','.svg':'image/svg+xml'};
 
 export function criarMock({latencia = Number(process.env.MOCK_LATENCIA) || 0, iaTeste = process.env.MOCK_IA_TESTE || '', papel = process.env.MOCK_PAPEL || 'admin'} = {}) {
   let {clientes, leads} = gerarDados();
   const acoes = [];
+  const papelPadrao = PAPEIS_MOCK[papel] ? papel : 'admin';
+
+  /* ---------- equipe, perfis (um "você" por papel), tarefas, notificações, metas ---------- */
+  const agoraIso = () => new Date().toISOString();
+  const perfis = EQUIPE_BASE.slice(1).map(p => ({ativo: true, cargo: null, telefone: null, avatar_cor: null, recebe_leads: true, precisa_trocar_senha: false, preferencias: {}, ultimo_acesso_em: new Date(Date.now() - 3 * 3600000).toISOString(), ultimo_app: 'atendimento', ...p}));
+  const euPorPapel = new Map();
+  const eu = pp => {
+    if (!euPorPapel.has(pp)) euPorPapel.set(pp, {...EQUIPE_BASE[0], ativo: true, telefone: null, avatar_cor: null, recebe_leads: true, precisa_trocar_senha: false, preferencias: {}, ultimo_acesso_em: null, ultimo_app: null, ...PAPEIS_MOCK[pp]});
+    return euPorPapel.get(pp);
+  };
+  const equipe = pp => [eu(pp), ...perfis];
+  const ha = (d, h = 10) => { const x = new Date(); x.setDate(x.getDate() + d); x.setHours(h, 0, 0, 0); return x.toISOString(); };
+  let tarefas = [
+    {titulo: 'Retornar o orçamento de freios (fictício)', vence_em: ha(-2, 10), prioridade: 3, lead_id: leads[1].id},
+    {titulo: 'Ligar para confirmar o diagnóstico (fictício)', vence_em: ha(-1, 15), prioridade: 2, lead_id: leads[2].id},
+    {titulo: 'Mandar foto do scanner (fictício)', vence_em: ha(0, 9), prioridade: 2},
+    {titulo: 'Cobrar resposta da suspensão (fictício)', vence_em: ha(0, 16), prioridade: 3, lead_id: leads[3].id},
+    {titulo: 'Pós-venda da troca de óleo (fictício)', vence_em: ha(2, 11), prioridade: 1},
+    {titulo: 'Conferir peças com o fornecedor (fictício)', vence_em: null, prioridade: 2},
+    {titulo: 'Agendar alinhamento do cliente (fictício)', vence_em: ha(1, 10), prioridade: 2, responsavel_id: EQUIPE_BASE[1].id},
+  ].map((t, i) => ({id: `bbbbbbbb-bbbb-4bbb-8bbb-${String(i).padStart(12, '0')}`, descricao: null, responsavel_id: EU, criado_por: i === 3 ? EQUIPE_BASE[3].id : EU, cliente_id: null, conversa_id: null, agendamento_id: null, origem: i === 3 ? 'atendimento' : 'crm', status: 'aberta', concluida_em: null, concluida_por: null, created_at: new Date(Date.now() - (10 - i) * 3600000).toISOString(), lead_id: null, ...t}));
+  let notificacoes = [
+    {tipo: 'lead_atribuido', titulo: 'Lead passado para você', corpo: `${leads[4].nome} — ${leads[4].servico}`, link: '/?lead=' + leads[4].id, app: 'crm', lida_em: null, created_at: new Date(Date.now() - 20 * 60000).toISOString()},
+    {tipo: 'aguardando_consultor', titulo: 'Cliente esperando consultor', corpo: 'Conversa fictícia aguardando resposta', link: '/?conversa=00000000-0000-4000-8000-000000000123', app: 'atendimento', lida_em: null, created_at: new Date(Date.now() - 3 * 3600000).toISOString()},
+    {tipo: 'tarefa_atribuida', titulo: 'Nova tarefa: cobrar resposta da suspensão', corpo: 'Diego Gestor Fictício passou para você', link: '/?lead=' + leads[3].id, app: 'crm', lida_em: null, created_at: new Date(Date.now() - 5 * 3600000).toISOString()},
+    {tipo: 'sistema', titulo: 'Bem-vindo ao CRM (fictício)', corpo: null, link: null, app: 'crm', lida_em: new Date(Date.now() - 86400000).toISOString(), created_at: new Date(Date.now() - 2 * 86400000).toISOString()},
+  ].map((n, i) => ({id: `cccccccc-cccc-4ccc-8ccc-${String(i).padStart(12, '0')}`, perfil_id: EU, chave: null, ...n}));
+  const metas = new Map();       // 'AAAA-MM' → [{perfil_id, leads, agendamentos, vendas, faturamento}]
+  const mesHoje = () => new Date().toISOString().slice(0, 7);
+  metas.set(mesHoje(), [{perfil_id: null, leads: 60, agendamentos: 30, vendas: 20, faturamento: 30000}, {perfil_id: EU, leads: 15, agendamentos: 8, vendas: 6, faturamento: 8000}, {perfil_id: EQUIPE_BASE[1].id, leads: 15, agendamentos: 8, vendas: 5, faturamento: 7000}]);
+  const sse = new Set();
+  const avisar = (table, eventType, novo, velho) => { const d = `data: ${JSON.stringify({table, eventType, new: novo || {}, old: velho || {}})}\n\n`; for (const r of sse) { try { r.write(d); } catch { sse.delete(r); } } };
+  /* "RLS" do banco falso: notificações só minhas; tarefas da equipe; perfil só o meu se grava. */
+  const filtrar = (lista, filtros) => lista.filter(x => filtros.every(([op, c, v]) => op === 'eq' ? String(x[c]) === String(v) : op === 'neq' ? String(x[c]) !== String(v)
+    : op === 'in' ? (v || []).map(String).includes(String(x[c])) : op === 'is' ? (v === null ? x[c] == null : x[c] === v) : op === 'gte' ? String(x[c]) >= String(v) : op === 'lte' ? String(x[c]) <= String(v) : true));
+  const recorte = (x, cols) => { if (!cols || cols === '*') return {...x}; const o = {}; for (const c of String(cols).split(',').map(s => s.trim()).filter(Boolean)) o[c] = x[c] ?? null; return o; };
+  function bancoFalso(q, pp) {
+    const me = eu(pp), daEquipe = me.ativo !== false && ['admin','gestor','atendente'].includes(me.papel);
+    const negar = () => ({data: null, error: {message: 'permission denied (RLS fictícia)', code: '42501'}});
+    let tabela;
+    if (q.tabela === 'perfis') tabela = equipe(pp);
+    else if (q.tabela === 'tarefas') { if (!daEquipe) return negar(); tabela = tarefas; }
+    else if (q.tabela === 'notificacoes') tabela = notificacoes.filter(n => n.perfil_id === EU);
+    else return {data: null, error: {message: 'tabela fictícia não existe', code: '42P01'}};
+    const unico = linhas => q.unico === 'single' ? (linhas.length === 1 ? {data: linhas[0], error: null} : {data: null, error: {message: 'JSON object requested, multiple (or no) rows returned', code: 'PGRST116'}}) : q.unico === 'maybe' ? {data: linhas[0] || null, error: null} : {data: linhas, error: null};
+    if (q.op === 'select') {
+      let l = filtrar(tabela, q.filtros);
+      for (const [c, asc, nf] of [...q.ordem].reverse()) l = [...l].sort((a, b) => { const x = a[c], y = b[c]; if (x == null && y == null) return 0; if (x == null) return nf ? -1 : 1; if (y == null) return nf ? 1 : -1; return (String(x) < String(y) ? -1 : String(x) > String(y) ? 1 : 0) * (asc ? 1 : -1); });
+      if (q.limite) l = l.slice(0, q.limite);
+      return unico(l.map(x => recorte(x, q.select)));
+    }
+    if (q.op === 'insert') {
+      if (q.tabela !== 'tarefas') return negar();
+      const novos = (Array.isArray(q.valores) ? q.valores : [q.valores]).map(v => ({descricao: null, responsavel_id: null, cliente_id: null, lead_id: null, conversa_id: null, agendamento_id: null, origem: 'manual', prioridade: 2, vence_em: null, status: 'aberta', concluida_em: null, concluida_por: null, ...v, id: crypto.randomUUID(), criado_por: EU, created_at: agoraIso()}));
+      if (novos.some(t => !String(t.titulo || '').trim())) return {data: null, error: {message: 'null value in column "titulo"', code: '23502'}};
+      tarefas.push(...novos); novos.forEach(t => avisar('tarefas', 'INSERT', t));
+      return q.devolver ? unico(novos.map(x => recorte(x, q.devolver))) : {data: null, error: null};
+    }
+    const alvo = filtrar(tabela, q.filtros);
+    if (q.op === 'update') {
+      const v = {...q.valores};
+      if (q.tabela === 'perfis') {
+        if (alvo.some(p => p.id !== EU)) return negar();
+        if (['papel','apps','ativo'].some(k => k in v && !(pp === 'admin'))) return {data: null, error: {message: 'Só o administrador muda papel, apps ou ativo (gatilho fictício).', code: 'P0001'}};
+      }
+      if (q.tabela === 'tarefas' && v.status) { v.concluida_em = v.status === 'feita' ? agoraIso() : null; v.concluida_por = v.status === 'feita' ? EU : null; }
+      for (const x of alvo) { const velho = {...x}; Object.assign(x, v); avisar(q.tabela, 'UPDATE', {...x}, velho); }
+      return q.devolver ? unico(alvo.map(x => recorte(x, q.devolver))) : {data: null, error: null};
+    }
+    if (q.op === 'delete') {
+      if (q.tabela === 'perfis') return negar();
+      if (q.tabela === 'tarefas' && !['admin','gestor'].includes(me.papel) && alvo.some(t => t.criado_por !== EU)) return negar();
+      const ids = new Set(alvo.map(x => x.id));
+      if (q.tabela === 'tarefas') tarefas = tarefas.filter(t => !ids.has(t.id)); else notificacoes = notificacoes.filter(n => !ids.has(n.id));
+      alvo.forEach(x => avisar(q.tabela, 'DELETE', null, {id: x.id, perfil_id: x.perfil_id, responsavel_id: x.responsavel_id}));
+      return {data: null, error: null};
+    }
+    return {data: null, error: {message: 'operação fictícia não suportada'}};
+  }
+  /* Realizado e projeção de metas e desempenho, calculados dos leads fictícios. */
+  const doMes = (l, campo, mes) => String(l[campo] || '').slice(0, 7) === mes;
+  function realizado(mes, perfilId) {
+    const ls = leads.filter(l => !perfilId || l.responsavel_id === perfilId);
+    const ganhos = ls.filter(l => l.status === 'concluido' && doMes(l, 'closed_at', mes));
+    return {leads: ls.filter(l => doMes(l, 'created_at', mes)).length, agendamentos: ls.filter(l => ['agendado','em_servico','concluido'].includes(l.status) && doMes(l, 'updated_at', mes)).length,
+      vendas: ganhos.length, faturamento: ganhos.reduce((s, l) => s + Number(l.valor_pago || 0), 0)};
+  }
+  /* Formato do servidor real: {mes, decorrido, loja:{meta, itens, status}, pessoas:[{perfil_id, nome, avatar_cor, meta, itens, status}]} */
+  function metasServidor(mes, pp) {
+    const plano = metasDoMes(mes, pp), dias = new Date(+mes.slice(0, 4), +mes.slice(5, 7), 0).getDate();
+    const frac = mes === mesHoje() ? new Date().getDate() / dias : mes < mesHoje() ? 1 : 0;
+    const CAMPOS = ['leads','agendamentos','vendas','faturamento'];
+    const montar = m => { const tem = CAMPOS.some(k => m[k] > 0);
+      const itens = Object.fromEntries(CAMPOS.map(k => [k, m[k] > 0 ? {meta: m[k], realizado: m.realizado[k], progresso: Math.round(m.realizado[k] / m[k] * 1000) / 10, projecao: frac ? m.projecao[k] : null, batida: m.realizado[k] >= m[k]} : {meta: null, realizado: m.realizado[k], progresso: null, projecao: null}]));
+      return {meta: tem ? {leads: m.leads, agendamentos: m.agendamentos, vendas: m.vendas, faturamento: m.faturamento} : null, itens, status: tem ? 'ok' : 'sem_meta'}; };
+    const pessoa = id => equipe(pp).find(p => p.id === id) || {};
+    return {mes, decorrido: Math.round(frac * 1000) / 10, loja: montar(plano[0]), pessoas: plano.slice(1).map(m => ({perfil_id: m.perfil_id, nome: pessoa(m.perfil_id).nome, avatar_cor: pessoa(m.perfil_id).avatar_cor || null, ...montar(m)}))};
+  }
+  function metasDoMes(mes, pp) {
+    const dias = new Date(+mes.slice(0, 4), +mes.slice(5, 7), 0).getDate(), hoje = new Date(), atual = mes === mesHoje();
+    const passados = atual ? hoje.getDate() : (mes < mesHoje() ? dias : 0);
+    const salvas = metas.get(mes) || [];
+    const ids = [null, ...equipe(pp).filter(p => p.papel !== 'agenda' && p.ativo !== false).map(p => p.id)];
+    return ids.map(id => { const m = salvas.find(x => (x.perfil_id || null) === id) || {perfil_id: id, leads: 0, agendamentos: 0, vendas: 0, faturamento: 0};
+      const r = realizado(mes, id); const projecao = Object.fromEntries(Object.entries(r).map(([k, v]) => [k, passados ? Math.round(v / passados * dias * 100) / 100 : 0]));
+      return {...m, perfil_id: id, realizado: r, projecao}; });
+  }
+  function desempenho(de, ate, pp) {
+    const dentro = v => { const d = String(v || '').slice(0, 10); return d >= de && d <= ate; };
+    return equipe(pp).filter(p => p.papel !== 'agenda' && p.ativo !== false).map((p, i) => {
+      const ls = leads.filter(l => l.responsavel_id === p.id), novos = ls.filter(l => dentro(l.created_at)), ganhos = ls.filter(l => l.status === 'concluido' && dentro(l.closed_at));
+      const decididos = ls.filter(l => ['concluido','perdido'].includes(l.status) && dentro(l.closed_at)).length;
+      return {perfil_id: p.id, nome: p.nome, leads: novos.length, agendados: ls.filter(l => ['agendado','em_servico'].includes(l.status)).length, vendas: ganhos.length,
+        faturamento: ganhos.reduce((s, l) => s + Number(l.valor_pago || 0), 0), conversao: decididos ? Math.round(ganhos.length / decididos * 1000) / 10 : 0, tempo_resposta_min: [12, 34, 7, null][i % 4]};
+    });
+  }
   const resumo = (lista, desde) => {
     const rec = desde ? lista.filter(l => Date.parse(l.created_at) >= desde) : lista;
     const ganhos = rec.filter(l => l.status === 'concluido'), perdidos = rec.filter(l => l.status === 'perdido');
@@ -153,15 +299,93 @@ export function criarMock({latencia = Number(process.env.MOCK_LATENCIA) || 0, ia
 
   return http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
-    const json = (v, status = 200) => { res.writeHead(status, {'Content-Type': 'application/json', 'Cache-Control': 'no-store'}); res.end(JSON.stringify(v)); };
+    const cabExtra = {};
+    const json = (v, status = 200) => { res.writeHead(status, {'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...cabExtra}); res.end(JSON.stringify(v)); };
+    // papel desta requisição: ?papel= (vira cookie) > cookie > padrão
+    const cookie = /(?:^|;\s*)mock_papel=([a-z_]+)/.exec(req.headers.cookie || '')?.[1];
+    const pedido = url.searchParams.get('papel');
+    const pp = PAPEIS_MOCK[pedido] ? pedido : PAPEIS_MOCK[cookie] ? cookie : papelPadrao;
+    if (PAPEIS_MOCK[pedido]) cabExtra['Set-Cookie'] = `mock_papel=${pedido}; Path=/; SameSite=Strict`;
+    if (url.pathname === '/__sb/eventos') {
+      res.writeHead(200, {'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive'}); res.write(': ok\n\n');
+      sse.add(res); req.on('close', () => sse.delete(res)); return;
+    }
     let body = ''; for await (const c of req) body += c;
     let d = {};
-    try { d = body ? JSON.parse(body) : {}; } catch { return json({erro: 'JSON inválido.'}, 400); }
+    try { d = body ? JSON.parse(body) : {}; } catch { return json({erro: 'JSON inválido.', codigo: 'json_invalido'}, 400); }
+    if (url.pathname === '/__sb' && req.method === 'POST') return json(bancoFalso(d, pp));
+    if (url.pathname === '/__mock/notificar' && req.method === 'POST') {
+      const n = {id: crypto.randomUUID(), perfil_id: EU, tipo: d.tipo || 'lead_atribuido', titulo: String(d.titulo || 'Notificação fictícia').slice(0, 160), corpo: d.corpo ?? null, link: d.link ?? null, app: d.app || 'crm', chave: null, lida_em: null, created_at: agoraIso()};
+      notificacoes.unshift(n); avisar('notificacoes', 'INSERT', n); return json(n, 201);
+    }
+    if (url.pathname === '/__mock/tarefa' && req.method === 'POST') {
+      const t = {id: crypto.randomUUID(), titulo: String(d.titulo || 'Tarefa fictícia'), descricao: null, responsavel_id: EU, criado_por: EQUIPE_BASE[3].id, lead_id: d.lead_id || null, cliente_id: null, conversa_id: null, agendamento_id: null, origem: 'atendimento', prioridade: 2, vence_em: d.vence_em || null, status: 'aberta', concluida_em: null, concluida_por: null, created_at: agoraIso()};
+      tarefas.push(t); avisar('tarefas', 'INSERT', t); return json(t, 201);
+    }
     if (url.pathname.startsWith('/api/')) {
       if (latencia) await new Promise(r => setTimeout(r, latencia));
-      const p = url.pathname;
+      const p = url.pathname, me = eu(pp), gestor = ['admin','gestor'].includes(me.papel);
       if (p === '/api/config') return json({configurado: true, supabaseUrl: 'http://localhost', supabaseAnonKey: 'ficticia'});
-      if (p === '/api/perfil') return json({id: 'ficticio', nome: 'Equipe de teste', email: 'teste@exemplo.invalid', papel});
+      if (p === '/api/primeiro-acesso') return json({aberto: false});
+      /* Portão igual ao combinado com o servidor real: 401 sem token; 401/403 com código. */
+      const token = /^Bearer (.+)$/.exec(req.headers.authorization || '')?.[1];
+      if (!token) return json({erro: 'Faça login para usar o CRM.', codigo: 'sem_login'}, 401);
+      if (token === 'expirado') return json({erro: 'Sessão expirada.', codigo: 'token_expirado'}, 401);
+      if (me.ativo === false) return json({erro: 'Seu acesso foi desativado.', codigo: 'desativado'}, 401);
+      if (me.papel === 'agenda' || (me.papel !== 'admin' && !(me.apps || []).includes('crm'))) return json({erro: 'Você não tem acesso ao CRM.', codigo: 'sem_acesso_app'}, 403);
+      if (p === '/api/perfil' && req.method === 'GET') { const {apps, cargo, telefone, precisa_trocar_senha, preferencias, ...b} = me; return json({...b, apps, cargo, telefone, precisa_trocar_senha, avatar_cor: preferencias?.avatar_cor || null}); }
+      if (p === '/api/perfil' && req.method === 'PATCH') { for (const k of ['nome','cargo','telefone']) if (k in d) me[k] = d[k]; if (d.avatar_cor) me.preferencias = {...me.preferencias, avatar_cor: d.avatar_cor}; return json({ok: true, nome: me.nome}); }
+      if (me.precisa_trocar_senha) return json({erro: 'Troque a senha provisória antes de continuar.', codigo: 'precisa_trocar_senha'}, 403);
+      if (p === '/api/equipe/nomes') return json(equipe(pp).filter(x => x.ativo !== false).map(x => ({id: x.id, nome: x.nome, avatar_cor: x.avatar_cor || null, papel: x.papel})));
+      // formato do servidor real: só quem pode usar o CRM (sem o papel agenda), com a carga de leads abertos
+      if (p === '/api/vendedores') { const carga = id => leads.filter(l => l.responsavel_id === id && !['concluido','perdido'].includes(l.status)).length;
+        return json({vendedores: equipe(pp).filter(x => x.ativo !== false && x.papel !== 'agenda').map(x => ({id: x.id, nome: x.nome, papel: x.papel, cargo: x.cargo || null, avatar_cor: x.avatar_cor || null, recebe_leads: x.recebe_leads !== false, ultimo_lead_em: null, abertos: carga(x.id), eu: x.id === EU}))}); }
+      const mr = p.match(/^\/api\/leads\/([0-9a-f-]{36})\/responsavel$/);
+      if (mr && req.method === 'PATCH') {
+        const l = leads.find(x => x.id === mr[1]); if (!l) return json({erro: 'Lead não encontrado.', codigo: 'nao_encontrado'}, 404);
+        const r = d.responsavel_id === 'eu' ? EU : (d.responsavel_id ?? null), antes = l.responsavel_id || null;
+        if (r === null && !gestor) return json({erro: 'Só um gestor pode deixar o lead sem responsável.'}, 403);
+        if (!gestor && antes && antes !== EU) return json({erro: 'Só o responsável pelo lead ou um gestor pode passá-lo para outra pessoa.'}, 403);
+        if (r !== null && !equipe(pp).some(x => x.id === r && x.papel !== 'agenda')) return json({erro: 'Essa pessoa não pode receber leads do CRM (desativada ou sem acesso).'}, 400);
+        if (antes === r) return json({ok: true, mudou: false, lead: {id: l.id, nome: l.nome, status: l.status, responsavel_id: antes}});
+        Object.assign(l, {responsavel_id: r, updated_at: agoraIso()});
+        return json({ok: true, mudou: true, lead: {id: l.id, nome: l.nome, status: l.status, responsavel_id: r}, responsavel: r ? {id: r} : null});
+      }
+      if (p === '/api/leads/responsavel-lote' && req.method === 'POST') {
+        if (!gestor) return json({erro: 'Só um gestor distribui leads em lote.'}, 403);
+        const ids = Array.isArray(d.ids) ? d.ids.filter(x => EH_UUID.test(String(x))) : [], r = d.responsavel_id ?? null;
+        if (!ids.length || ids.length > 200) return json({erro: 'Escolha de 1 a 200 leads.', codigo: 'lote_invalido'}, 400);
+        if (r !== null && !equipe(pp).some(x => x.id === r && x.papel !== 'agenda')) return json({erro: 'Escolha alguém da equipe.', codigo: 'responsavel_invalido'}, 400);
+        const mexidos = leads.filter(l => ids.includes(l.id)); mexidos.forEach(l => Object.assign(l, {responsavel_id: r, updated_at: agoraIso()}));
+        return json({ok: true, atualizados: mexidos.length, ids: mexidos.map(l => l.id), responsavel: r ? {id: r} : null});
+      }
+      if (p === '/api/metas') {
+        const mes = url.searchParams.get('mes') || mesHoje();
+        if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) return json({erro: 'Mês inválido (AAAA-MM).', codigo: 'mes_invalido'}, 400);
+        if (req.method === 'PUT') {
+          if (!gestor) return json({erro: 'Só gestor ou administrador define metas.', codigo: 'papel_insuficiente'}, 403);
+          const lista = Array.isArray(d) ? d : d.metas, mesB = d.mes || mes;
+          if (!Array.isArray(lista) || !lista.length || lista.length > 30) return json({erro: 'Envie de 1 a 30 metas.'}, 400);
+          const atuais = metas.get(mesB) || [];
+          for (const m of lista) { const x = {perfil_id: m.perfil_id || null, leads: +m.leads || 0, agendamentos: +m.agendamentos || 0, vendas: +m.vendas || 0, faturamento: +m.faturamento || 0}; const i = atuais.findIndex(a => (a.perfil_id || null) === x.perfil_id); if (i >= 0) atuais[i] = x; else atuais.push(x); }
+          metas.set(mesB, atuais);
+          return json({ok: true, metas: lista});
+        }
+        return json(url.searchParams.get('formato') === 'lista' ? metasDoMes(mes, pp) : metasServidor(mes, pp));
+      }
+      if (p === '/api/desempenho') {
+        // como o servidor real: ?mes=AAAA-MM ou ?dias=N; atendente vê só os próprios números
+        const mesQ = url.searchParams.get('mes'), dias = Number(url.searchParams.get('dias'));
+        let de, ate;
+        if (dias >= 1) { ate = new Date().toISOString().slice(0, 10); de = new Date(Date.now() - (dias - 1) * DIA).toISOString().slice(0, 10); }
+        else { const m = mesQ || mesHoje(); de = m + '-01'; ate = m + '-' + String(new Date(+m.slice(0, 4), +m.slice(5, 7), 0).getDate()).padStart(2, '0'); }
+        let pessoas = desempenho(de, ate, pp); if (!gestor) pessoas = pessoas.filter(x => x.perfil_id === EU);
+        return json({periodo: {desde: de, ate, mes: mesQ || null, dias: dias || null}, pessoas, ranking: [...pessoas].sort((a, b) => b.faturamento - a.faturamento).map((x, i) => ({posicao: i + 1, perfil_id: x.perfil_id, nome: x.nome, faturamento: x.faturamento, vendas: x.vendas, conversao: x.conversao}))});
+      }
+      if (p === '/api/tarefas' && req.method === 'GET') return json(bancoFalso({tabela: 'tarefas', op: 'select', select: '*', filtros: [['eq', 'status', url.searchParams.get('status') || 'aberta'], ['eq', 'responsavel_id', url.searchParams.get('responsavel_id') || EU]], ordem: [['vence_em', true, false]], limite: 300}, pp).data || []);
+      if (p === '/api/tarefas' && req.method === 'POST') { const r = bancoFalso({tabela: 'tarefas', op: 'insert', valores: d, devolver: '*', unico: 'single', filtros: [], ordem: []}, pp); return r.error ? json({erro: r.error.message}, 400) : json(r.data, 201); }
+      const mt = p.match(/^\/api\/tarefas\/([0-9a-f-]{36})$/);
+      if (mt && req.method === 'PATCH') { const r = bancoFalso({tabela: 'tarefas', op: 'update', valores: d, devolver: '*', unico: 'maybe', filtros: [['eq', 'id', mt[1]]], ordem: []}, pp); return r.data ? json(r.data) : json({erro: 'Tarefa não encontrada.'}, 404); }
       if (p === '/api/stats') return json({semana: resumo(leads, Date.now() - 7 * DIA), geral: resumo(leads), comparativo: {leads: {atual: 5, anterior: 4}, faturamento: {atual: 900, anterior: 1200}}, dominios: {STATUSES: statuses, ORIGENS: origens}});
       if (p === '/api/saude') return json({avisos: [{problema: 'Aviso fictício: integração em manutenção', desde: '2026-10-09'}]});
       if (p === '/api/lead-por-telefone') {
@@ -188,7 +412,7 @@ export function criarMock({latencia = Number(process.env.MOCK_LATENCIA) || 0, ia
           Object.assign(l, d, {updated_at: new Date().toISOString()});
           if (mudouEtapa) l.closed_at = ['concluido','perdido'].includes(l.status) ? l.updated_at : null;
         }
-        if (req.method === 'DELETE') { leads = leads.filter(x => x.id !== id); return json({ok: true}); }
+        if (req.method === 'DELETE') { if (!gestor) return json({erro: 'Só gestor ou administrador apaga leads.', codigo: 'papel_insuficiente'}, 403); leads = leads.filter(x => x.id !== id); return json({ok: true}); }
         return json(l);
       }
       if (p === '/api/clientes') {
@@ -207,8 +431,9 @@ export function criarMock({latencia = Number(process.env.MOCK_LATENCIA) || 0, ia
         return json(fichaCliente(id));
       }
       if (p === '/api/resumo-ia') return json({ok: true, resumo: '## Semana fictícia\n- Dados inventados pelo servidor falso.', modelo: 'mock', geradoEm: new Date().toISOString()});
-      if (p === '/api/catalogo') return json({servicos: [], souAdmin: papel === 'admin'});
-      if (p === '/api/equipe') return json({equipe: [], souAdmin: papel === 'admin'});
+      if (p === '/api/catalogo') return json({servicos: [], souAdmin: me.papel === 'admin'});
+      if (p === '/api/equipe' && req.method === 'GET') { const lista = me.papel === 'admin' ? equipe(pp) : [me]; return json({equipe: lista.map(x => ({id: x.id, nome: x.nome, email: x.email, papel: x.papel, ativo: x.ativo !== false, ultimo_acesso_em: x.ultimo_acesso_em, created_at: '2026-08-01T12:00:00Z'})), souAdmin: me.papel === 'admin', meuId: EU}); }
+      if (p === '/api/equipe/papel' && req.method === 'POST') { if (me.papel !== 'admin') return json({erro: 'Só o administrador muda a função da equipe.', codigo: 'papel_insuficiente'}, 403); const x = equipe(pp).find(y => y.id === d.id); if (!x || !['admin','gestor','atendente','agenda'].includes(d.papel)) return json({erro: 'Pessoa ou função inválida.'}, 400); x.papel = d.papel; return json({ok: true}); }
       if (p === '/api/integracoes') return json({canais: []});
       if (p === '/api/roi') return json({totais: {investimento: 0, faturamento: 0, lucro: 0, roi: null, leads: 0, ganhos: 0}, linhas: []});
       return json({erro: 'Rota fictícia não implementada'}, 404);
@@ -219,11 +444,11 @@ export function criarMock({latencia = Number(process.env.MOCK_LATENCIA) || 0, ia
     try {
       let data = fs.readFileSync(f);
       if (rel === 'index.html') {
-        let h = data.toString().replace(/<script src="https:\/\/cdn.jsdelivr[^>]+><\/script>/, `<script>${auth}</script>`).replace(/if \('serviceWorker' in navigator\)/, 'if (false)');
+        let h = data.toString().replace(/<script src="https:\/\/cdn.jsdelivr[^>]+><\/script>/, () => `<script>window.__MOCK_PAPEL=${JSON.stringify(pp)};${SB_FALSO.replace(/<\/script/gi, '<\\/script')}</script>`).replace(/if \('serviceWorker' in navigator\)/, 'if (false)');
         if (iaTeste) h = h.replace('</body>', '<script src="/__ia-teste.js"></script></body>');
         data = Buffer.from(h);
       }
-      res.writeHead(200, {'Content-Type': tipos[path.extname(f)] || 'application/octet-stream', 'Cache-Control': 'no-cache'}); res.end(data);
+      res.writeHead(200, {'Content-Type': tipos[path.extname(f)] || 'application/octet-stream', 'Cache-Control': 'no-cache', ...cabExtra}); res.end(data);
     } catch { return json({erro: 'Arquivo não encontrado'}, 404); }
   });
 }

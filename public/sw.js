@@ -1,11 +1,11 @@
 // Service Worker do IndyCar CRM — torna o app instalável e abre a casca
 // rápido mesmo com internet ruim na oficina.
-// v4 (09/10/2026, rodada 2): gaveta do lead, painel por período, lembretes.
-const CACHE = 'indycar-crm-v4';
+// v5 (13/10/2026, rodada 3): login completo, sino, tarefas, responsável e equipe (acesso.js, equipe.js).
+const CACHE = 'indycar-crm-v5';
 
 /* Se QUALQUER item desta lista faltar, o addAll rejeita e o service worker
    NÃO instala. Só o que existe de verdade (crm-ia.js/.css são do módulo da IA). */
-const CORE = ['/', '/styles.css', '/app.js', '/crm-utils.js', '/melhorias.js', '/crm-ia.js', '/crm-ia.css',
+const CORE = ['/', '/styles.css', '/app.js', '/crm-utils.js', '/melhorias.js', '/acesso.js', '/equipe.js', '/crm-ia.js', '/crm-ia.css',
               '/manifest.json', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', (e) => {
