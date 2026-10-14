@@ -649,7 +649,8 @@ Confiabilidade com o Render dormindo, velocidade, valor pago, distribuição dos
 118. Movimento reduzido: girador da faixa e animações novas param.
 119. Número dos motivos de perda não quebra linha.
 120. Servidor falso: `MOCK_LEADS`, `MOCK_DORMINDO`, `POST /__mock/dormir`, `?tour=1`, idempotência e as rotas novas; o tour fica escondido por padrão (não atrapalha o E2E de telas).
-121. Testes: 7 do servidor (ping, compressão, ETag, idempotência, clientes > 1.000, valor pago, distribuição, desempenho livre), 10 das funções puras e 5 da IA.
+121. ETag fraca (o proxy do Render devolve W/"…") também vale para o 304 — achado na conferência em produção.
+122. Testes: 7 do servidor (ping, compressão, ETag, idempotência, clientes > 1.000, valor pago, distribuição, desempenho livre), 10 das funções puras e 5 da IA.
 
 ## Como foi verificado
 - `npm test`: 118 passando; `npm run segredos`: nada; `npm audit`: 0 vulnerabilidades.

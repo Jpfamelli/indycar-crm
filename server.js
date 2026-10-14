@@ -120,7 +120,8 @@ function serveStatic(req, res, urlPath) {
   const cab = { 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-cache', 'Content-Type': tipo, ETag: item.etag, Vary: 'Accept-Encoding' };
   if (item.csp) cab['Content-Security-Policy'] = item.csp;
   const inm = String(req.headers['if-none-match'] || '');
-  if (inm && inm.split(/\s*,\s*/).includes(item.etag)) { res.writeHead(304, cab); res.end(); return; }
+  // o proxy do Render devolve a ETag como fraca (W/"..."): compara sem o W/
+  if (inm && inm.split(/\s*,\s*/).map(x => x.replace(/^W\//, '')).includes(item.etag)) { res.writeHead(304, cab); res.end(); return; }
   const { corpo, cod } = R4.COMPRIMIVEL_TIPO(tipo) ? ESTATICOS.versao(item, R4.codificacao(req)) : { corpo: item.raw, cod: null };
   if (cod) cab['Content-Encoding'] = cod;
   cab['Content-Length'] = corpo.length;

@@ -25,6 +25,8 @@ test('ping sem login, compressão do JSON e ETag dos estáticos', async () => {
     const etag = br.headers.get('etag'); assert.ok(etag);
     const r304 = await fetch(s.url + '/app.js', { headers: { 'If-None-Match': etag } });
     assert.equal(r304.status, 304);
+    const fraca = await fetch(s.url + '/app.js', { headers: { 'If-None-Match': 'W/' + etag } });
+    assert.equal(fraca.status, 304, 'ETag fraca (como o proxy do Render devolve) também vale');
     const html = await fetch(s.url + '/');
     assert.match(html.headers.get('content-security-policy'), /script-src/);
     const post = await fetch(s.url + '/app.js', { method: 'POST' });
