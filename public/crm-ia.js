@@ -30,6 +30,12 @@
     return cab;
   }
   async function api(url, opts = {}) {
+    // rodada 4: pelo pedido da tela (window.IndyCar.pedir) a IA ganha a espera do
+    // "sistema acordando", a renovação do login e a chave de idempotência
+    if (typeof IC().pedir === 'function') {
+      try { return await IC().pedir(url, { ...opts, signal: AbortSignal.timeout(opts.prazo || 90000) }, { tentativas: 4 }); }
+      catch (e) { if (e.name === 'TimeoutError') throw new Error('A IA demorou demais. Tente de novo.'); throw e; }
+    }
     let r;
     try {
       r = await fetch(url, { signal: AbortSignal.timeout(opts.prazo || 90000), ...opts, headers: { ...(await cabecalhos()), ...(opts.headers || {}) } });

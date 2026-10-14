@@ -42,6 +42,10 @@ const { criarAutomacoes } = require('./lib/automacoes');
 const { rotasR3 } = require('./lib/rotas');
 const SEG = require('./lib/seguranca');
 const U = require('./lib/util-servidor');
+const R4 = require('./lib/rodada4');
+const ESTATICOS = R4.criarEstaticos({ fs });
+const IDEM = R4.criarIdempotencia();
+const VERSAO = (() => { try { return require('./package.json').version + '-r4'; } catch { return 'r4'; } })();
 
 const PORT = process.env.PORT || 3100;
 const PUBLIC = path.join(__dirname, 'public');
@@ -54,11 +58,18 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=u
                '.json': 'application/json; charset=utf-8',
                '.webmanifest': 'application/manifest+json' };
 
+/* Resposta JSON. Rodada 4: comprime (br/gzip) o que passa de 1 KB — a lista de
+   leads cai de ~400 KB para ~40 KB — e guarda a resposta das escritas com chave
+   de idempotência (a tela repete o pedido quando o Render está acordando). */
 const json = (res, code, data) => {
-  const body = JSON.stringify(data);
-  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8',
-                        'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Length': Buffer.byteLength(body) });
-  res.end(body);
+  const buf = Buffer.from(JSON.stringify(data));
+  if (res._idem) { res._idem.terminar(code, data); res._idem = null; }
+  const { corpo, cod } = R4.corpoParaEnviar(res._req, buf, 'application/json');
+  const vary = res.getHeader('Vary');
+  const cab = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Length': corpo.length, Vary: vary ? `${vary}, Accept-Encoding` : 'Accept-Encoding' };
+  if (cod) cab['Content-Encoding'] = cod;
+  res.writeHead(code, cab);
+  res.end(res._req?.method === 'HEAD' ? undefined : corpo);
 };
 
 function readBody(req) {
@@ -89,20 +100,32 @@ function readBody(req) {
   });
 }
 
-function serveStatic(res, urlPath) {
-  const rel = urlPath === '/' ? 'index.html' : urlPath.slice(1);
+/* Estáticos (rodada 4): lidos do disco uma vez por versão, com ETag (304 quando
+   não mudou) e já comprimidos em br/gzip. no-cache = o navegador sempre confere,
+   mas a conferência sem mudança custa só os cabeçalhos. */
+function serveStatic(req, res, urlPath) {
+  let rel;
+  try { rel = urlPath === '/' ? 'index.html' : decodeURIComponent(urlPath.slice(1)); } catch { res.writeHead(400).end('Pedido inválido'); return; }
   // impede path traversal
   const file = path.resolve(PUBLIC, rel);
   if (!file.startsWith(PUBLIC + path.sep)) { res.writeHead(403).end('Proibido'); return; }
-  fs.readFile(file, (err, buf) => {
-    if (err) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('Não encontrado'); return; }
-    const ext = path.extname(file);
-    const cab = { 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-cache', 'Content-Type': MIME[ext] || 'application/octet-stream' };
+  if (!['GET', 'HEAD'].includes(req.method)) { res.writeHead(405, { Allow: 'GET, HEAD' }).end(); return; }
+  let item;
+  const ext = path.extname(file);
+  try {
     // a página ganha a CSP com o hash dos scripts embutidos (a API fica com default-src 'none')
-    if (ext === '.html') cab['Content-Security-Policy'] = SEG.cspPagina({ hashes: SEG.hashesScripts(buf.toString('utf8')), supabaseUrl: SUPABASE_URL });
-    res.writeHead(200, cab);
-    res.end(buf);
-  });
+    item = ESTATICOS.ler(file, ext === '.html' ? raw => ({ csp: SEG.cspPagina({ hashes: SEG.hashesScripts(raw.toString('utf8')), supabaseUrl: SUPABASE_URL }) }) : null);
+  } catch { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('Não encontrado'); return; }
+  const tipo = MIME[ext] || 'application/octet-stream';
+  const cab = { 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-cache', 'Content-Type': tipo, ETag: item.etag, Vary: 'Accept-Encoding' };
+  if (item.csp) cab['Content-Security-Policy'] = item.csp;
+  const inm = String(req.headers['if-none-match'] || '');
+  if (inm && inm.split(/\s*,\s*/).includes(item.etag)) { res.writeHead(304, cab); res.end(); return; }
+  const { corpo, cod } = R4.COMPRIMIVEL_TIPO(tipo) ? ESTATICOS.versao(item, R4.codificacao(req)) : { corpo: item.raw, cod: null };
+  if (cod) cab['Content-Encoding'] = cod;
+  cab['Content-Length'] = corpo.length;
+  res.writeHead(200, cab);
+  res.end(req.method === 'HEAD' ? undefined : corpo);
 }
 
 /* ------------------------------------------------------------
@@ -208,24 +231,40 @@ const chaveTel = s => { const d = soDigitos(s); return d.length >= 8 ? d.slice(-
 const nDinheiro = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 
 /** Lê clientes + leads + agendamentos de uma vez e devolve tudo já ligado. */
+/* Rodada 4: a base passou de 1.000 clientes (2.464) e o Supabase corta cada
+   consulta em 1.000 linhas — a busca não achava quem estava depois do milésimo.
+   Agora lê de 1.000 em 1.000 (ordem estável pelo id) e guarda 30 s: a busca
+   por letra não relê as três tabelas a cada tecla. */
+let CLIENTES_CACHE = null;
+const CLIENTES_CACHE_MS = Number(process.env.CRM_CACHE_CLIENTES_MS ?? 30000);
 async function carregarBaseClientes() {
+  if (CLIENTES_CACHE && CLIENTES_CACHE.expira > Date.now()) return CLIENTES_CACHE.valor;
+  if (CLIENTES_CACHE?.lendo) return CLIENTES_CACHE.lendo;
+  const lendo = montarBaseClientes();
+  CLIENTES_CACHE = { lendo, expira: 0 };
+  try { const valor = await lendo; if (CLIENTES_CACHE?.lendo === lendo) CLIENTES_CACHE = { valor, expira: Date.now() + CLIENTES_CACHE_MS }; return valor; }
+  catch (e) { if (CLIENTES_CACHE?.lendo === lendo) CLIENTES_CACHE = null; throw e; }
+}
+async function montarBaseClientes() {
   const sb = adminSupabase();
   if (!sb) throw new Error('Servidor sem a chave do banco configurada.');
 
   const [rc, rl, ra] = await Promise.all([
-    sb.from('clientes')
+    U.todas(() => sb.from('clientes')
       .select('id,nome,telefone,email,carro_modelo,carro_ano,placa,origem,observacoes,created_at,nascimento,aceita_mensagens,aceita_mensagens_em')
-      .order('nome'),
-    sb.from('leads')
+      .order('id')),
+    U.todas(() => sb.from('leads')
       .select('id,cliente_id,nome,telefone,servico,valor_orcado,valor_pago,status,origem,utm_campaign,observacoes,created_at,closed_at')
-      .order('created_at', { ascending: false }),
-    sb.from('agendamentos')
+      .order('id')),
+    U.todas(() => sb.from('agendamentos')
       .select('id,cliente_id,lead_id,cliente_nome,telefone,servico,veiculo,placa,data,hora,status,valor,origem,compareceu,created_at')
-      .order('data', { ascending: false }),
+      .order('id')),
   ]);
   for (const r of [rc, rl, ra]) if (r.error) throw new Error(r.error.message);
 
-  const clientes = rc.data || [], leads = rl.data || [], agendamentos = ra.data || [];
+  const clientes = (rc.data || []).sort((a, b) => String(a.nome ?? '').localeCompare(String(b.nome ?? ''), 'pt-BR'));
+  const leads = (rl.data || []).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+  const agendamentos = (ra.data || []).sort((a, b) => String(b.data).localeCompare(String(a.data)));
 
   // índice por id e por telefone — registros antigos podem não ter cliente_id
   const porId  = new Map(clientes.map(c => [c.id, c]));
@@ -303,6 +342,7 @@ const server = http.createServer(async (req, res) => {
     try { url = new URL(req.url, `http://${req.headers.host || 'localhost'}`); }
     catch { return json(res, 400, { erro: 'requisição malformada' }); }
     const { pathname } = url;
+    res._req = req;
     SEG.aplicarCabecalhos(res, { https: NA_NUVEM });
 
     // ---------- API ----------
@@ -316,6 +356,12 @@ const server = http.createServer(async (req, res) => {
 
       // A tela precisa saber onde fica o Supabase para montar o login.
       // A chave publicável é pública por design.
+      /* Rodada 4: ping sem login e barato. A tela chama para acordar o Render
+         enquanto a pessoa digita a senha e para saber quando o servidor voltou. */
+      if (pathname === '/api/ping' && (req.method === 'GET' || req.method === 'HEAD')) {
+        return json(res, 200, { ok: true, versao: VERSAO, hora: new Date().toISOString(), noArDesde: NO_AR_DESDE });
+      }
+
       if (pathname === '/api/config' && req.method === 'GET') {
         return json(res, 200, {
           supabaseUrl: SUPABASE_URL,
@@ -426,12 +472,28 @@ const server = http.createServer(async (req, res) => {
       }
       if (req.method !== 'GET') statsCache = null;
 
+      /* Idempotência (rodada 4): a mesma escrita repetida com a mesma chave
+         devolve a primeira resposta, sem fazer a ação duas vezes. */
+      const chaveIdem = IDEM.chaveDe(req, quem.id);
+      if (chaveIdem) {
+        let r = IDEM.comecar(chaveIdem);
+        if (r.aguardar) { const prim = await r.aguardar; if (prim) { req.resume(); return json(res, prim.status, prim.corpo); } r = IDEM.comecar(chaveIdem); }
+        if (r.repetida) { req.resume(); res.setHeader('x-idempotencia-repetida', '1'); return json(res, r.repetida.status, r.repetida.corpo); }
+        if (r.entrada) res._idem = r.entrada;
+      }
+      const limparTudo = () => { statsCache = null; CLIENTES_CACHE = null; store.esquecerCache?.(); };
+      if (req.method !== 'GET') { CLIENTES_CACHE = null; }
+
+      /* Rodada 4: valor pago (sem valor + lote) e distribuição em lote. */
+      if (await R4.rotasR4({ req, res, url, pathname, quem, json, lerCorpo: () => readBody(req), freio: FREIO, auditar,
+        equipe: equipe(), sb: USA_SUPABASE ? adminSupabase() : null, limparStats: limparTudo })) return;
+
       /* Rodada 3: eu, vendedores, responsável, rodízio, desempenho, metas,
          tarefas, automações, auditoria, equipe (apps / recebe leads / senha). */
       if (await rotasR3({ req, res, url, pathname, quem, json, lerCorpo: () => readBody(req), freio: FREIO, auditar,
         acesso: acesso(), equipe: equipe(), tarefas: tarefas(), automacoes: automacoes(), sb: USA_SUPABASE ? adminSupabase() : null,
         automacoesLigadas: AUTOMACOES_LIGADAS && USA_SUPABASE, intervaloMin: INTERVALO_MIN, tokenAgendador: !!TOKEN_AGENDADOR,
-        limparStats: () => { statsCache = null; } })) return;
+        limparStats: limparTudo })) return;
 
       /* ============================================================
          IA DO CRM — /api/ia/*  (login exigido acima; toda ação em ia_acoes)
@@ -1006,7 +1068,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ---------- Arquivos estáticos ----------
-    serveStatic(res, pathname);
+    serveStatic(req, res, pathname);
 
   } catch (err) {
     const st = err && Number.isInteger(err.status) && err.status >= 400 && err.status < 600 ? err.status : 500;
@@ -1024,6 +1086,7 @@ const server = http.createServer(async (req, res) => {
      Google, e abrir para o Wi-Fi local não traz ganho nenhum.
    Force com CRM_HOST se precisar de outra coisa. */
 const NA_NUVEM = !!(process.env.RENDER || process.env.PORT);
+const NO_AR_DESDE = new Date().toISOString();
 const HOST = process.env.CRM_HOST || (NA_NUVEM ? '0.0.0.0' : '127.0.0.1');
 
 /* Automações no próprio servidor: primeira volta 1 min depois de subir, depois
@@ -1035,7 +1098,9 @@ if (AUTOMACOES_LIGADAS && USA_SUPABASE && typeof setInterval === 'function') {
   const t2 = setInterval(volta, INTERVALO_MIN * 60_000); if (t2.unref) t2.unref();
 }
 
-server.headersTimeout = 20_000;
+server.headersTimeout = 66_000;
+/* keep-alive maior que o do proxy do Render (evita 502 por conexão reaproveitada que o Node já fechou) */
+server.keepAliveTimeout = 65_000;
 server.requestTimeout = 30_000;
 server.listen(PORT, HOST, () => {
   console.log(`\n🏁 IndyCar CRM rodando em http://localhost:${PORT}`);

@@ -2,12 +2,20 @@
   'use strict';
   const normalizar = v => String(v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
   const digitos = v => String(v ?? '').replace(/\D/g, '');
+  /* Rodada 4: o texto normalizado de cada lead fica guardado (WeakMap) — a busca por
+     letra em 600+ leads não normaliza os mesmos campos a cada tecla. O objeto do lead
+     é trocado a cada gravação (substituirLocal), então o cache nunca fica velho. */
+  const INDICE = typeof WeakMap === 'function' ? new WeakMap() : null;
+  function indiceBusca(l) {
+    let x = INDICE && INDICE.get(l);
+    if (!x) { x = {campos: [l.nome,l.telefone,l.placa,l.carro_modelo,l.servico].map(normalizar), tel8: digitos(l.telefone).slice(-8)}; if (INDICE && l && typeof l === 'object') INDICE.set(l, x); }
+    return x;
+  }
   function buscar(l, q) {
     const termo = normalizar(q);
     if (!termo) return true;
-    const tel = digitos(q);
-    return [l.nome,l.telefone,l.placa,l.carro_modelo,l.servico].some(v => normalizar(v).includes(termo)) ||
-      (tel.length >= 8 && digitos(l.telefone).slice(-8) === tel.slice(-8));
+    const tel = digitos(q), x = indiceBusca(l);
+    return x.campos.some(v => v.includes(termo)) || (tel.length >= 8 && x.tel8 === tel.slice(-8));
   }
   function validarLead(d, parcial = false) {
     if (!d || typeof d !== 'object' || Array.isArray(d)) return 'Informe um objeto JSON.';
@@ -188,7 +196,7 @@
     return ok.includes('cliente') ? ok : COLUNAS_PADRAO.slice();
   }
   /* Atalhos de teclado: sequência "g" + letra leva a uma aba. */
-  const ATALHOS_ABA = {d:'dashboard', l:'leads', f:'pipeline', c:'clientes', i:'ia', o:'origem', s:'servicos', e:'equipe', t:'dashboard'};
+  const ATALHOS_ABA = {d:'dashboard', l:'leads', f:'pipeline', c:'clientes', i:'ia', o:'origem', s:'servicos', e:'equipe', t:'dashboard', b:'distribuir', r:'relatorios'};
   /* ---------- Rodada 3 (tela) — login, acesso, equipe, tarefas, notificações ---------- */
   const EH_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const ehUuid = v => EH_UUID.test(String(v ?? ''));

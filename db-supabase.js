@@ -64,6 +64,17 @@ const alnum  = s => semAcento(s).replace(/[^a-z0-9]/g, '');
 const digitos = s => String(s ?? '').replace(/\D/g, '');
 const telKey = s => { const d = digitos(s); return d.length >= 8 ? d.slice(-8) : d; };
 
+/* Colunas explícitas (rodada 4): só o que a tela e a IA usam, nada de select('*'). */
+const COLS_LEAD = 'id,cliente_id,nome,telefone,carro_modelo,placa,servico,valor_orcado,valor_pago,status,origem,'
+  + 'utm_source,utm_medium,utm_campaign,observacoes,created_at,updated_at,closed_at,responsavel_id';
+
+/* Cache curto da lista inteira (painel, funil e lista leem a mesma coisa várias
+   vezes por minuto). Toda gravação feita por aqui esquece o cache; mudança feita
+   por outro app (gatilhos, Atendimento) aparece em até CACHE_MS. */
+const CACHE_MS = Number(process.env.CRM_CACHE_LEADS_MS ?? 8000);
+let CACHE_LEADS = null;
+function esquecerCache() { CACHE_LEADS = null; }
+
 const COLS = ['nome','telefone','carro_modelo','placa','servico','valor_orcado','valor_pago',
               'status','origem','utm_source','utm_medium','utm_campaign','observacoes'];
 
@@ -82,13 +93,14 @@ async function createLead(data = {}) {
   if (data.responsavel_id !== undefined) row.responsavel_id = data.responsavel_id;
   // closed_at e cliente_id são preenchidos pelos gatilhos do Postgres
 
-  const { data: novo, error } = await sb.from('leads').insert(row).select().single();
+  const { data: novo, error } = await sb.from('leads').insert(row).select(COLS_LEAD).single();
   erro('createLead', error);
+  esquecerCache();
   return normalizarLead(novo);
 }
 
 async function getLead(id) {
-  const { data, error } = await sb.from('leads').select('*').eq('id', id).maybeSingle();
+  const { data, error } = await sb.from('leads').select(COLS_LEAD).eq('id', id).maybeSingle();
   erro('getLead', error);
   return normalizarLead(data);
 }
@@ -96,24 +108,11 @@ async function getLead(id) {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 async function listLeads({ status, origem, q, responsavel } = {}) {
-  // de 1000 em 1000: o Supabase corta cada consulta em 1000 linhas
-  const filtrar = query => {
-    if (status && STATUSES.includes(status)) query = query.eq('status', status);
-    if (origem && ORIGENS.includes(origem))  query = query.eq('origem', origem);
-    if (responsavel === 'nenhum') query = query.is('responsavel_id', null);
-    else if (responsavel && UUID_RE.test(responsavel)) query = query.eq('responsavel_id', responsavel);
-    return query;
-  };
-  const data = [];
-  let error = null;
-  for (let i = 0; i < 20000; i += 1000) {
-    const r = await filtrar(sb.from('leads').select('*')).order('created_at', { ascending: false }).range(i, i + 999);
-    if (r.error) { error = r.error; break; }
-    data.push(...(r.data || []));
-    if (!r.data || r.data.length < 1000) break;
-  }
-  erro('listLeads', error);
-  const rows = (data || []).map(normalizarLead);
+  // a base inteira vem do cache curto (uma leitura serve painel, funil e lista); filtra em memória
+  const rows = (await todosOsLeads()).filter(l =>
+    (!status || !STATUSES.includes(status) || l.status === status)
+    && (!origem || !ORIGENS.includes(origem) || l.origem === origem)
+    && (responsavel === 'nenhum' ? !l.responsavel_id : (!responsavel || !UUID_RE.test(responsavel) || l.responsavel_id === responsavel)));
 
   const termo = norm(q);
   if (!termo) return rows;
@@ -140,14 +139,16 @@ async function updateLead(id, data = {}) {
   if ('origem' in patch && !ORIGENS.includes(patch.origem))  delete patch.origem;
   if (!Object.keys(patch).length) return getLead(id);
 
-  const { data: row, error } = await sb.from('leads').update(patch).eq('id', id).select().maybeSingle();
+  const { data: row, error } = await sb.from('leads').update(patch).eq('id', id).select(COLS_LEAD).maybeSingle();
   erro('updateLead', error);
+  esquecerCache();
   return normalizarLead(row);
 }
 
 async function deleteLead(id) {
   const { error, count } = await sb.from('leads').delete({ count: 'exact' }).eq('id', id);
   erro('deleteLead', error);
+  esquecerCache();
   return (count ?? 0) > 0;
 }
 
@@ -197,14 +198,27 @@ function statsDe(rows, sinceISO) {
 }
 
 async function todosOsLeads() {
-  const out = [];
-  for (let i = 0; i < 20000; i += 1000) {
-    const { data, error } = await sb.from('leads').select('*').order('created_at', { ascending: false }).range(i, i + 999);
-    erro('todosOsLeads', error);
-    out.push(...(data || []));
-    if (!data || data.length < 1000) break;
-  }
-  return out.map(normalizarLead);
+  const t = Date.now();
+  if (CACHE_LEADS && CACHE_LEADS.expira > t) return CACHE_LEADS.lista.slice();
+  // pedidos ao mesmo tempo esperam a mesma leitura (o painel pede várias coisas juntas)
+  if (CACHE_LEADS?.lendo) return (await CACHE_LEADS.lendo).slice();
+  const lendo = (async () => {
+    const out = [];
+    // de 1000 em 1000 (o Supabase corta cada consulta em 1000), ordem estável pelo id
+    for (let i = 0; i < 20000; i += 1000) {
+      const { data, error } = await sb.from('leads').select(COLS_LEAD).order('id').range(i, i + 999);
+      erro('todosOsLeads', error);
+      out.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
+    return out.map(normalizarLead).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+  })();
+  CACHE_LEADS = { lendo, expira: 0 };
+  try {
+    const lista = await lendo;
+    if (CACHE_LEADS?.lendo === lendo) CACHE_LEADS = { lista, expira: Date.now() + CACHE_MS };
+    return lista.slice();
+  } catch (e) { if (CACHE_LEADS?.lendo === lendo) CACHE_LEADS = null; throw e; }
 }
 
 async function getStats() {
@@ -444,6 +458,7 @@ module.exports = {
   getStats, weeklyData, reseed,
   getIntegracoes, salvarIntegracao, limparIntegracao,
   salvarMetrica, getROI,
+  todosOsLeads, esquecerCache, COLS_LEAD,
   _sb: sb,
 };
 

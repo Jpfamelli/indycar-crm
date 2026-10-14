@@ -20,11 +20,12 @@ function ordenarLeads() {
     : String(b.created_at).localeCompare(String(a.created_at)));
 }
 function salvarFiltros() {
-  gravarLS('indycar_crm_filtros', {status: $('#fStatus').value, origem: $('#fOrigem').value, ordem: $('#ordemLeads').value, parados: $('#soParados').checked});
+  gravarLS('indycar_crm_filtros', {status: $('#fStatus').value, origem: $('#fOrigem').value, ordem: $('#ordemLeads').value, parados: $('#soParados').checked, semValor: !!$('#soSemValor')?.checked});
 }
 $('#ordemLeads').addEventListener('change', () => { ordenarLeads(); salvarFiltros(); PAG_LEADS = 1; renderTabelaLeads(); });
-$('#soParados').addEventListener('change', () => { PAG_LEADS = 1; carregarLeads().catch(e => toast(e.message)); });
-$('#limparFiltros').addEventListener('click', () => { $('#fStatus').value = ''; $('#fOrigem').value = ''; $('#search').value = ''; $('#ordemLeads').value = 'recente'; $('#soParados').checked = false; PAG_LEADS = 1; carregarLeads().catch(e => toast(e.message)); });
+$('#soParados').addEventListener('change', () => refiltrarTela());
+$('#soSemValor').addEventListener('change', () => refiltrarTela());
+$('#limparFiltros').addEventListener('click', () => { $('#fStatus').value = ''; $('#fOrigem').value = ''; $('#search').value = ''; $('#ordemLeads').value = 'recente'; $('#soParados').checked = false; $('#soSemValor').checked = false; refiltrarTela(); renderKanban(); });
 function baixarCsv(lista, nome) {
   const rows = [['Nome','Telefone','Carro','Placa','Serviço','Origem','Status','Responsável','Orçado','Pago','Entrada','Dias na etapa','Campanha'], ...lista.map(l => [l.nome, l.telefone, l.carro_modelo, l.placa, l.servico, LABEL_ORIGEM[l.origem] || l.origem, LABEL_STATUS[l.status] || l.status, nomeResponsavel(l.responsavel_id), l.valor_orcado, l.valor_pago, l.created_at, U.diasNaEtapa(l), l.utm_campaign])];
   const url = URL.createObjectURL(new Blob([U.csv(rows)], {type: 'text/csv;charset=utf-8'}));
@@ -85,17 +86,25 @@ function perguntarPerda(nome) {
 }
 $('#formPago').addEventListener('submit', e => {
   e.preventDefault();
-  const v = Number($('#pagoValor').value);
-  if ($('#pagoValor').value === '' || !Number.isFinite(v) || v < 0 || v > 10000000) { $('#pagoErro').textContent = 'Informe o valor pago (pode ser zero se foi cortesia).'; $('#pagoValor').setAttribute('aria-invalid', 'true'); return; }
-  $('#dlgPago')._ok(Math.round(v * 100) / 100);
+  const v = Number(String($('#pagoValor').value).replace(',', '.'));
+  if ($('#pagoValor').value === '' || !Number.isFinite(v) || v < 0 || v > 10000000) { $('#pagoErro').textContent = 'Informe quanto o cliente pagou. Se não cobrou nada, use "Foi cortesia".'; $('#pagoValor').setAttribute('aria-invalid', 'true'); $('#pagoValor').focus(); return; }
+  // zero digitado = cortesia (assim o lead não fica na lista de "sem valor")
+  $('#dlgPago')._ok({valor: Math.round(v * 100) / 100, cortesia: v === 0});
 });
-function perguntarPago(lead) {
-  const sug = Number(lead.valor_orcado) || 0;
-  $('#dlgPagoNome').textContent = `Lead: ${lead.nome || ''}`; $('#pagoErro').textContent = ''; $('#pagoValor').removeAttribute('aria-invalid');
-  $('#pagoValor').value = Number(lead.valor_pago) || sug || '';
-  const b = $('#pagoSugestao'); b.hidden = !sug; b.textContent = `Usar o orçado: ${brl(sug)}`; b.onclick = () => { $('#pagoValor').value = sug; $('#pagoValor').focus(); };
+$('#pagoCortesia').addEventListener('click', () => $('#dlgPago')._ok({valor: 0, cortesia: true}));
+/* Rodada 4: devolve {valor, cortesia} (ou null se cancelou). Sugere o orçado e mostra
+   de onde vem a sugestão; "Foi cortesia" grava zero com a marca na observação. */
+function perguntarPagoDetalhe(lead) {
+  const sugs = CrmR4.sugestoesValor(lead, lead._sugestoes || {});
+  $('#dlgPagoNome').textContent = `Lead: ${lead.nome || ''}${lead.servico ? ' · ' + lead.servico : ''}`; $('#pagoErro').textContent = ''; $('#pagoValor').removeAttribute('aria-invalid');
+  $('#pagoValor').value = Number(lead.valor_pago) || (sugs[0] ? sugs[0].valor : '');
+  $('#pagoSugestoes').innerHTML = sugs.map(s => `<button type="button" class="filtro-pill" data-valor="${esc(s.valor)}">${esc(s.rotulo)}: ${esc(brl(s.valor))}</button>`).join('');
+  $('#pagoSugestoes').hidden = !sugs.length;
+  $('#pagoDica').textContent = sugs.length ? 'Já deixamos a sugestão preenchida. Confira com o que o cliente pagou.' : 'Sem orçamento registrado: digite o valor que o cliente pagou.';
   const p = abrirDlg($('#dlgPago')); setTimeout(() => $('#pagoValor').select(), 30); return p;
 }
+$('#pagoSugestoes').addEventListener('click', e => { const b = e.target.closest('[data-valor]'); if (b) { $('#pagoValor').value = b.dataset.valor; $('#pagoValor').focus(); } });
+async function perguntarPago(lead) { const r = await perguntarPagoDetalhe(lead); return r ? r.valor : null; }
 
 /* ---------------- toast com "Desfazer" ---------------- */
 function toastAcao(msg, rotulo, acao, ms = 7000) {
@@ -113,7 +122,8 @@ function substituirLocal(novo) {
 function refiltrar() {
   const st = $('#fStatus').value, og = $('#fOrigem').value, q = $('#search').value.trim(), so = $('#soParados').checked, agora = Date.now();
   const rp = $('#fResp').value, eu = PERFIL?.id;
-  LEADS = TODOS.filter(l => (!st || l.status === st) && (!og || l.origem === og) && U.filtroResponsavel(l, rp, eu) && U.buscar(l, q) && (!so || U.parado(l, agora)));
+  const sv = $('#soSemValor')?.checked;
+  LEADS = TODOS.filter(l => (!st || l.status === st) && (!og || l.origem === og) && U.filtroResponsavel(l, rp, eu) && U.buscar(l, q) && (!so || U.parado(l, agora)) && (!sv || CrmR4.semValor(l)));
   ordenarLeads();
   for (const id of [...SEL]) if (!TODOS.some(l => String(l.id) === id)) SEL.delete(id);
 }
@@ -122,12 +132,24 @@ function redesenhar() {
   $('#leadCount').textContent = `${LEADS.length} registro${LEADS.length === 1 ? '' : 's'}`;
   if (LEAD_ABERTO && modal.classList.contains('open')) { const l = TODOS.find(x => String(x.id) === String(LEAD_ABERTO)); if (l) renderFichaLead(l); }
 }
-async function patchLead(id, corpo) { return api('/api/leads/' + encodeURIComponent(id), {method: 'PATCH', body: JSON.stringify(corpo)}); }
+/* Rodada 4: mudança de etapa/valor sem servidor não trava a tela. Tenta rápido
+   (duas vezes); se o sistema estiver acordando, a mudança entra na fila e vai
+   sozinha quando ele voltar (PATCH é repetível: grava os mesmos campos). */
+async function patchLead(id, corpo) {
+  const url = '/api/leads/' + encodeURIComponent(id);
+  try { return await api(url, {method: 'PATCH', body: JSON.stringify(corpo)}, false, {tentativas: Rede.acordando ? 0 : 2}); }
+  catch (e) {
+    if (e.codigo !== 'acordando') throw e;
+    const l = TODOS.find(x => String(x.id) === String(id));
+    enfileirar({url, corpo, nome: l?.nome || ''});
+    return {...(l || {id}), ...corpo, updated_at: new Date().toISOString(), _naFila: true};
+  }
+}
 /* Prepara o corpo da mudança: pede motivo ao perder e valor ao concluir. null = cancelado. */
 async function corpoMudanca(l, novo) {
   const corpo = {status: novo};
   if (novo === 'perdido') { const m = await perguntarPerda(l.nome); if (!m) return null; corpo.observacoes = U.comMotivoPerda(l.observacoes, m); }
-  if (novo === 'concluido') { const v = await perguntarPago(l); if (v === null) return null; corpo.valor_pago = v; }
+  if (novo === 'concluido') { const v = await perguntarPagoDetalhe(l); if (!v) return null; corpo.valor_pago = v.valor; if (v.cortesia) corpo.observacoes = CrmR4.comCortesia(corpo.observacoes ?? l.observacoes); }
   return corpo;
 }
 async function moverEtapa(id, novo, {anunciar} = {}) {
@@ -171,9 +193,17 @@ function linhaLead(l, {selecao = false, cols = COLUNAS, agora = Date.now()} = {}
     ${cols.map(c => celula(c, l, agora)).join('')}</tr>`;
 }
 const VAZIO_LEADS = '<tbody><tr><td class="vazio-celula"><strong>Nenhum lead encontrado.</strong><br>Limpe os filtros ou use <kbd>N</kbd> / + Novo Lead para começar.</td></tr></tbody>';
+/* Estado vazio que ensina (rodada 4): diz por que está vazio e o próximo passo. */
+function vazioLeads() {
+  const r = $('#fResp')?.value, filtros = $('#fStatus').value || $('#fOrigem').value || $('#search').value.trim() || $('#soParados').checked || $('#soSemValor')?.checked;
+  if (!TODOS.length) return '<tbody><tr><td class="vazio-celula"><strong>Ainda não há leads.</strong><br>Os contatos do WhatsApp entram sozinhos. Para cadastrar à mão: <kbd>N</kbd> ou "+ Novo Lead".</td></tr></tbody>';
+  if ($('#soSemValor')?.checked) return '<tbody><tr><td class="vazio-celula"><strong>Nenhum concluído sem valor. 🏁</strong><br>Faturamento em dia.</td></tr></tbody>';
+  if (r === 'meus' && !filtros) return `<tbody><tr><td class="vazio-celula"><strong>Nenhum lead com você ainda.</strong><br>Veja os <button type="button" class="link-btn" data-vazio="sem">leads sem responsável</button> e use "Pegar para mim" na ficha${SOU_GESTOR ? ', ou divida em <button type="button" class="link-btn" data-vazio="distribuir">Distribuir</button>' : ', ou peça ao gestor para distribuir'}.</td></tr></tbody>`;
+  return VAZIO_LEADS;
+}
 function renderTabela(sel, rows, {selecao = false, cols = COLUNAS} = {}) {
   const el = $(sel);
-  if (!rows.length) { el.innerHTML = VAZIO_LEADS; return; }
+  if (!rows.length) { el.innerHTML = sel === '#tblLeads' ? vazioLeads() : VAZIO_LEADS; return; }
   const agora = Date.now();
   const todosSel = selecao && rows.every(l => SEL.has(String(l.id)));
   el.innerHTML = `<thead><tr>${selecao ? `<th class="col-sel"><input type="checkbox" id="selPagina" aria-label="Selecionar todos desta página" ${todosSel ? 'checked' : ''}></th>` : ''}${cols.map(c => `<th${c === 'valor' ? ' class="num"' : ''}>${ROTULO_COLUNA[c]}</th>`).join('')}</tr></thead>
@@ -418,7 +448,7 @@ function renderPainel() {
 }
 $('#listaParados').addEventListener('click', e => {
   const b = e.target.closest('[data-lead]'); if (b) return abrirModal(b.dataset.lead);
-  if (e.target.id === 'verParados') { $('#soParados').checked = true; $('#ordemLeads').value = 'parado'; irPara('leads'); carregarLeads().catch(x => toast(x.message)); }
+  if (e.target.id === 'verParados') { $('#soParados').checked = true; $('#ordemLeads').value = 'parado'; irPara('leads'); refiltrarTela(); }
 });
 
 /* Metas do mês, tarefas (tabela tarefas) e responsável do lead: equipe.js (rodada 3).
@@ -569,7 +599,7 @@ document.addEventListener('keydown', e => {
   if (prefixoG && Date.now() - prefixoG < 1200 && U.ATALHOS_ABA[k]) { e.preventDefault(); prefixoG = 0; const v = U.ATALHOS_ABA[k]; if (!$(`.nav-item[data-view="${v}"]`)?.hidden) { irPara(v); if (k === 't') { $('#cardTarefas').scrollIntoView({block: 'start'}); $('#tarefaTexto').focus(); } else $('#viewTitle').focus(); } return; }
   prefixoG = 0;
   if (k === 'g') { prefixoG = Date.now(); return; }
-  if (e.key === '?') { e.preventDefault(); abrirAtalhos(); return; }
+  if (e.key === '?') { e.preventDefault(); (window.abrirAjuda || abrirAtalhos)(); return; }
   if (k === 'n') { e.preventDefault(); abrirModal(null); }
   if (e.key === '/') { e.preventDefault(); irPara('leads'); $('#search').focus(); }
 });
@@ -586,7 +616,7 @@ new MutationObserver(() => {
   filtrosRestaurados = true;
   const f = lerLS('indycar_crm_filtros', {});
   for (const [id, key] of [['fStatus', 'status'], ['fOrigem', 'origem'], ['ordemLeads', 'ordem']]) if ([...$('#' + id).options].some(o => o.value === f[key])) $('#' + id).value = f[key];
-  $('#soParados').checked = !!f.parados;
+  $('#soParados').checked = !!f.parados; if ($('#soSemValor')) $('#soSemValor').checked = !!f.semValor;
 }).observe($('#fStatus'), {childList: true});
 window.addEventListener('offline', () => { document.body.classList.add('sem-rede'); toast('Sem internet. Os dados não serão salvos até a conexão voltar.'); });
 window.addEventListener('online', () => { document.body.classList.remove('sem-rede'); toast('Conexão restabelecida.'); });
@@ -597,6 +627,8 @@ window.IndyCar = Object.freeze({
   toast: (msg, ms) => toast(String(msg ?? ''), ms),
   recarregarLeads: async () => { await carregarLeads(); if (STATS) renderPainel(); },
   abrirLead: id => abrirModal(id),
+  // rodada 4: o mesmo pedido da tela (espera o servidor acordar, renova login, idempotência)
+  pedir: (url, opts, cfg) => api(url, opts, false, cfg),
   // null antes do login: o crm-ia.js só se monta quando há papel (nada na tela de login)
   get papel() { return document.body.classList.contains('deslogado') ? null : (PERFIL?.papel ?? null); },
 });

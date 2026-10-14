@@ -43,7 +43,7 @@ async function subirServidor({ tabelas = {}, roteiros = [], env = {}, comPessoas
     catalogo_servicos: [], posvenda_envios: [], posvenda_respostas: [], orc_orcamentos: [], v_cliente_360: [], etapas_funil: [], ...tabelas };
   const sb = criarFakeSb(base);
   const ia = criarIAFalsa(roteiros);
-  const procEnv = { SUPABASE_URL: 'http://falso.invalid', SUPABASE_ANON_KEY: 'publica-ficticia', SUPABASE_SERVICE_ROLE_KEY: 'servico-ficticia', PORT: '0', ...env };
+  const procEnv = { SUPABASE_URL: 'http://falso.invalid', SUPABASE_ANON_KEY: 'publica-ficticia', SUPABASE_SERVICE_ROLE_KEY: 'servico-ficticia', PORT: '0', CRM_CACHE_LEADS_MS: '0', CRM_CACHE_CLIENTES_MS: '0', ...env };
   const store = carregarDb(sb, procEnv);
   const libIA = require('../lib/ia-crm');
   const auth = { chamadas: 0, fora: false };

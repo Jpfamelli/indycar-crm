@@ -30,20 +30,71 @@ async function authCabecalhos() {
    sessão vencida tenta renovar o token UMA vez e repete o pedido; desativado/sem acesso/
    troca de senha/duas etapas levam à tela certa; o resto vira erro com status e código. */
 function erroApi(msg, status, codigo) { const e = new Error(msg); e.status = status; e.codigo = codigo || null; return e; }
-const api = async (url, opts, renovou = false) => {
-  let r;
-  try {
-    r = await fetch(url, { signal: AbortSignal.timeout(20000), ...opts, headers: { ...(await authCabecalhos()), ...(opts?.headers || {}) } });
-  } catch (e) {
-    if (/sessão expirou/i.test(e.message)) { tratarAcesso('login'); throw e; }
-    throw erroApi(navigator.onLine === false ? 'Sem internet. Confira a conexão e tente de novo.' : 'Sem conexão com o servidor. Tente de novo em instantes.', 0, 'rede');
+
+/* ---------------- servidor acordando (rodada 4) ----------------
+   O Render gratuito dorme. Ao acordar, responde 502/503/504 por alguns minutos
+   (ou a conexão cai). Em vez de erro cru: faixa "acordando", novas tentativas
+   com espera crescente (~3 min) e aviso quando voltar. Escritas vão com chave de
+   idempotência — repetir não faz a ação duas vezes. */
+const R4 = CrmR4;
+const Rede = { acordando: false, desde: 0, cutucar: null, timer: null };
+function esperarAcordar(seg) {
+  return new Promise(resolve => {
+    const t = setTimeout(fim, seg * 1000);
+    function fim() { clearTimeout(t); window.removeEventListener('online', fim); document.removeEventListener('indycar:cutucar', fim); resolve(); }
+    window.addEventListener('online', fim); document.addEventListener('indycar:cutucar', fim);
+  });
+}
+function mostrarAcordando(tentativa, total, seg) {
+  const el = $('#acordando'); if (!el) return;
+  if (!Rede.acordando) { Rede.acordando = true; Rede.desde = Date.now(); }
+  el.hidden = false; document.body.classList.add('acordando');
+  let falta = seg;
+  const txt = () => { $('#acordandoTxt').textContent = navigator.onLine === false ? 'Sem internet. Assim que a conexão voltar, o CRM tenta de novo sozinho.' : R4.textoAcordando(tentativa, total, falta); };
+  txt(); clearInterval(Rede.timer); Rede.timer = setInterval(() => { falta = Math.max(0, falta - 1); txt(); }, 1000);
+}
+function servidorRespondeu() {
+  if (!Rede.acordando) return;
+  Rede.acordando = false; clearInterval(Rede.timer);
+  const el = $('#acordando'); if (el) el.hidden = true; document.body.classList.remove('acordando');
+  const s = Math.round((Date.now() - Rede.desde) / 1000);
+  toast(`✅ O sistema voltou${s > 5 ? ` (levou ${s} s)` : ''}. Pode continuar.`, 4500);
+  document.dispatchEvent(new CustomEvent('indycar:voltou'));
+}
+const api = async (url, opts, renovou = false, cfg = {}) => {
+  const metodo = String(opts?.method || 'GET').toUpperCase();
+  const esperas = R4.esperasAcordar().slice(0, cfg.tentativas ?? 10);
+  // a chave acompanha todas as tentativas desta mesma escrita
+  const chave = metodo === 'GET' ? null : (opts?.headers?.['x-idempotencia'] || R4.novaChave());
+  let r = null, corpo = null;
+  for (let i = 0; ; i++) {
+    let status = 0; corpo = null;
+    try {
+      r = await fetch(url, { signal: AbortSignal.timeout(metodo === 'GET' ? 25000 : 30000), ...opts, headers: { ...(await authCabecalhos()), ...(opts?.headers || {}), ...(chave ? { 'x-idempotencia': chave } : {}) } });
+      status = r.status;
+      try { corpo = await r.json(); } catch { /* resposta sem corpo JSON (ex.: página de erro do Render) */ }
+    } catch (e) {
+      if (/sessão expirou/i.test(e.message)) { tratarAcesso('login'); throw e; }
+      // prazo de quem chamou (ex.: a IA, 90 s) acabou: não adianta repetir com o mesmo sinal
+      if (opts?.signal?.aborted) throw erroApi('Demorou demais para responder. Tente de novo.', 0, 'tempo');
+    }
+    const acordando = R4.ehAcordando(status, corpo);
+    if (acordando && R4.deveRepetir({ metodo, status, corpo, chave: !!chave }) && i < esperas.length) {
+      mostrarAcordando(i + 1, esperas.length, esperas[i]); await esperarAcordar(esperas[i]); continue;
+    }
+    // 5xx do NOSSO servidor (banco lento): leitura tenta mais duas vezes, sem alarde
+    if (!acordando && metodo === 'GET' && [502, 503, 504].includes(status) && i < 2) { await esperarAcordar(1.5 * (i + 1)); continue; }
+    if (acordando) {
+      throw erroApi(navigator.onLine === false ? 'Sem internet. Confira a conexão e tente de novo.'
+        : 'O sistema ainda não acordou. Nada do que você fez se perdeu: tente de novo em instantes.', status, 'acordando');
+    }
+    servidorRespondeu();
+    break;
   }
-  let corpo = null;
-  try { corpo = await r.json(); } catch { /* resposta sem corpo JSON */ }
   const acao = CrmUtils.acaoErroAcesso(r.status, corpo);
   if (acao === 'login' && !renovou && sb) {
     // token vencido no meio do uso: renova sozinho e repete, sem derrubar a pessoa
-    try { const { data, error } = await sb.auth.refreshSession(); if (!error && data?.session) return api(url, opts, true); } catch { /* cai no login */ }
+    try { const { data, error } = await sb.auth.refreshSession(); if (!error && data?.session) return api(url, { ...opts, headers: { ...(opts?.headers || {}), ...(chave ? { 'x-idempotencia': chave } : {}) } }, true, cfg); } catch { /* cai no login */ }
   }
   const msg = (corpo && (corpo.erro || corpo.error)) || (r.status === 403 ? 'Você não tem permissão para isso.' : `Erro ${r.status} do servidor`);
   if (acao && acao !== 'proibido') { tratarAcesso(acao, corpo); throw erroApi(acao === 'login' ? 'Sessão expirada' : msg, r.status, acao); }
@@ -56,9 +107,10 @@ const dt  = s => new Date(s).toLocaleDateString('pt-BR', { day: '2-digit', month
 const LABEL_STATUS = { novo:'Novo', contato:'Em contato', orcamento:'Orçamento',
   agendado:'Agendado', em_servico:'Em serviço', concluido:'Concluído', perdido:'Perdido' };
 const LABEL_ORIGEM = { meta:'Meta / Instagram', google:'Google', indicacao:'Indicação',
-  organico:'Orgânico', whatsapp:'WhatsApp', passagem:'Passagem / Fachada' };
+  organico:'Orgânico', whatsapp:'WhatsApp', passagem:'Passagem / Fachada', telefone:'Telefone' };
 const COR_ORIGEM = { meta:'#3b82f6', google:'#e50914', indicacao:'#22c55e',
-  organico:'#a855f7', whatsapp:'#25d366', passagem:'#f59e0b' };
+  organico:'#a855f7', whatsapp:'#25d366', passagem:'#f59e0b', telefone:'#06b6d4' };
+const ORIGENS_FIXAS = ['meta', 'google', 'indicacao', 'organico', 'whatsapp', 'passagem', 'telefone'];
 const SERVICOS = ['Troca de Óleo de Motor','Troca de Óleo de Câmbio','Freios','Suspensão','Direção',
   'Correia Dentada','Pneus','Alinhamento 3D','Embreagem','Diagnóstico com Scanner',
   'Revisão de Motor','Revisão de Suspensão','Limpeza de Bicos','Outro'];
@@ -83,13 +135,15 @@ const TITULOS = {
   integracoes:   ['Integrações', 'Meta Ads, Google Ads e o ROI de cada canal'],
   ia:            ['IA', 'Pergunte ao CRM, triagem e o resumo da semana'],
   equipe:        ['Equipe e metas', 'Metas do mês, ranking e funil de cada vendedor'],
+  distribuir:    ['Distribuir leads', 'Divida os leads sem responsável entre a equipe, com prévia e desfazer'],
+  relatorios:    ['Relatórios', 'Funil, conversão, tempo de resposta e perdas do período, com exportação'],
   configuracoes: ['Configurações', 'Sua conta, sua senha e a equipe'],
 };
 // a busca do topo só filtra estas abas — nas outras ela ficava visível e inerte
 // (Clientes e Serviços têm a própria busca, dentro da aba)
 const ABAS_COM_BUSCA = new Set(['leads', 'pipeline']);
 // "+ Novo Lead" não faz sentido no catálogo nem nas configurações
-const ABAS_SEM_NOVO = new Set(['servicos', 'configuracoes', 'equipe']);
+const ABAS_SEM_NOVO = new Set(['servicos', 'configuracoes', 'equipe', 'distribuir', 'relatorios']);
 
 function irPara(v) {
   if (!TITULOS[v]) return;
@@ -106,6 +160,7 @@ function irPara(v) {
   if (v === 'servicos')      carregarCatalogo();
   if (v === 'configuracoes') carregarConfiguracoes();
   if (v === 'equipe')        carregarEquipeMetas();
+  document.dispatchEvent(new CustomEvent('indycar:aba', { detail: { aba: v } }));   // rodada4.js monta Distribuir e Relatórios
   try { sessionStorage.setItem('indycar_crm_aba', v); } catch { /* ignora */ }
 }
 $$('.nav-item').forEach(b => b.addEventListener('click', () => irPara(b.dataset.view)));
@@ -189,12 +244,15 @@ async function carregar() {
       $('#kanban').innerHTML = '<div class="kb-col"><div class="skeleton alto" aria-label="Carregando funil"></div></div>'.repeat(4);
       $('#tblLeads').innerHTML = '<tbody><tr><td><div class="skeleton" aria-label="Carregando leads"></div></td></tr></tbody>';
     }
-    STATS = await api('/api/stats');
-    carregarSaude();
-    STATUSES = STATS.dominios.STATUSES;
-    ORIGENS  = STATS.dominios.ORIGENS;
+    /* Rodada 4: as etapas e origens são fixas (enums do banco) — não precisa mais
+       pedir /api/stats (que lia a base inteira) só para saber delas. O painel e a
+       aba Origem calculam tudo com os leads que já vieram. */
+    STATUSES = CrmUtils.ETAPAS.slice();
+    ORIGENS  = ORIGENS_FIXAS.slice();
+    if (!STATS) STATS = { dominios: { STATUSES, ORIGENS } };
     preencherSelects();
     await carregarLeads();
+    carregarSaude();
     renderPainel();
     renderOrigem();
     renderHowto();
@@ -252,14 +310,16 @@ function preencherSelects() {
 
 /* ---------------- Origem ---------------- */
 function renderOrigem() {
-  const o = STATS.semana.porOrigem;
+  // últimos 7 dias, calculado aqui com os leads da tela (antes vinha de /api/stats)
+  const fim = new Date(), ini = new Date(fim.getFullYear(), fim.getMonth(), fim.getDate() - 6);
+  const o = CrmUtils.metricas(TODOS, ini, new Date(fim.getTime() + 60000)).porOrigem;
   const el = $('#tblOrigem');
   if (!o.length) { el.innerHTML = '<tbody><tr><td class="muted" style="padding:26px;text-align:center">Sem dados na semana.</td></tr></tbody>'; return; }
   el.innerHTML = `<thead><tr><th>Canal</th><th>Leads</th><th>Fechados</th><th>Conversão</th><th>Faturamento</th><th>R$ por lead</th></tr></thead>
     <tbody>${o.map(x => {
       const conv = x.leads ? (x.ganhos / x.leads) * 100 : 0;
       return `<tr>
-        <td><span class="origin-name"><span class="dot" style="background:${COR_ORIGEM[x.origem]}"></span>${LABEL_ORIGEM[x.origem]}</span></td>
+        <td><span class="origin-name"><span class="dot" style="background:${COR_ORIGEM[x.origem] || '#888'}"></span>${esc(LABEL_ORIGEM[x.origem] ?? x.origem)}</span></td>
         <td class="num">${x.leads}</td><td class="num">${x.ganhos}</td>
         <td class="num">${conv.toFixed(0)}%</td><td class="num">${brl(x.faturamento)}</td>
         <td class="num">${brl(x.leads ? x.faturamento / x.leads : 0)}</td></tr>`;
@@ -349,7 +409,7 @@ $('#leadForm').addEventListener('submit', async e => {
     observacoes: $('#fObs').value.trim(),
   };
   const btnSalvar = $('#leadForm button[type="submit"]');
-  btnSalvar.disabled = true;
+  btnSalvar.disabled = true; btnSalvar.textContent = 'Salvando…';
   try {
     const editando = editId, antes = editando ? TODOS.find(x => String(x.id) === String(editando)) : null;
     if (payload.status === 'perdido' && antes?.status !== 'perdido' && !U.motivoPerda(payload.observacoes)) {
@@ -357,8 +417,9 @@ $('#leadForm').addEventListener('submit', async e => {
       payload.observacoes = U.comMotivoPerda(payload.observacoes, m);
     }
     if (payload.status === 'concluido' && antes?.status !== 'concluido' && !(Number(payload.valor_pago) > 0)) {
-      const v = await perguntarPago({...payload, valor_pago: 0}); if (v === null) return;
-      payload.valor_pago = v;
+      const v = await perguntarPagoDetalhe({...antes, ...payload, valor_pago: 0}); if (!v) return;
+      payload.valor_pago = v.valor;
+      if (v.cortesia) payload.observacoes = CrmR4.comCortesia(payload.observacoes);
     }
     const falha = CrmUtils.validarLead(payload); if (falha) { toast('⚠️ ' + falha); return; }
     const salvo = editando ? await api(`/api/leads/${encodeURIComponent(editando)}`, { method: 'PATCH', body: JSON.stringify(payload) })
@@ -369,9 +430,10 @@ $('#leadForm').addEventListener('submit', async e => {
     else toastAcao('✅ Lead cadastrado', 'Abrir', () => abrirModal(salvo.id));
     carregar().catch(() => {});   // números do servidor (estatísticas) em segundo plano
   } catch (err) {
-    toast('⚠️ ' + err.message);   // erro do servidor não pode mais virar "sucesso"
+    // erro do servidor não pode mais virar "sucesso"; a gaveta fica aberta com tudo o que foi digitado
+    toast('⚠️ ' + err.message + (err.codigo === 'acordando' ? ' A ficha continua aberta: clique em Salvar de novo.' : ''), 7000);
   } finally {
-    btnSalvar.disabled = false;
+    btnSalvar.disabled = false; btnSalvar.textContent = 'Salvar';
   }
 });
 
@@ -392,8 +454,10 @@ $('#btnExcluir').addEventListener('click', async () => {
 let buscaT;
 // a busca filtra o que já está na tela: sem ir ao servidor a cada letra
 $('#search').addEventListener('input', () => { clearTimeout(buscaT); buscaT = setTimeout(() => { PAG_LEADS = 1; refiltrar(); renderTabelaLeads(); renderKanban(); $('#leadCount').textContent = `${LEADS.length} registro${LEADS.length === 1 ? '' : 's'}`; }, 200); });
-$('#fStatus').addEventListener('change', () => { PAG_LEADS = 1; carregarLeads().catch(e => toast('⚠️ ' + e.message)); });
-$('#fOrigem').addEventListener('change', () => { PAG_LEADS = 1; carregarLeads().catch(e => toast('⚠️ ' + e.message)); });
+// rodada 4: filtros só refazem a lista na tela (antes cada troca baixava todos os leads de novo)
+const refiltrarTela = () => { PAG_LEADS = 1; refiltrar(); salvarFiltros(); renderTabelaLeads(); $('#leadCount').textContent = `${LEADS.length} registro${LEADS.length === 1 ? '' : 's'}`; };
+$('#fStatus').addEventListener('change', refiltrarTela);
+$('#fOrigem').addEventListener('change', refiltrarTela);
 
 /* ---------------- IA ---------------- */
 /* Converte o markdown da IA em HTML. Processa BLOCO A BLOCO — a versão antiga

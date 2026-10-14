@@ -1081,3 +1081,134 @@ body.sem-rede .topbar::after{content:'Sem internet';position:fixed;top:10px;righ
 .tarefa-form input:first-child{flex:1 1 100%}
 .metas-grade .meta-topo{flex-direction:column;align-items:flex-start;gap:2px}
 @media (max-width:860px){.nav-item[data-badge]:not([data-badge=""])::after{top:1px;right:1px;min-width:16px;height:16px;font-size:.6rem;padding:0 4px}}
+
+/* ============================================================
+   RODADA 4 (14/10/2026) — acordando, fila, rascunho, valor pago,
+   distribuição, relatórios, "você hoje", ajuda e tour
+   ============================================================ */
+[hidden]{display:none!important}
+/* faixa "o sistema está acordando": fica por cima de tudo, inclusive do login */
+.acordando{position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:400;display:flex;align-items:center;gap:12px;
+  max-width:min(640px,calc(100vw - 24px));padding:10px 12px 10px 16px;border-radius:12px;background:var(--pop-solid);color:var(--texto);
+  border:1px solid var(--warn);box-shadow:var(--sombra-pop);font-size:.9rem;line-height:1.35}
+.acordando-ico{width:16px;height:16px;flex:none;border-radius:50%;border:2px solid color-mix(in srgb,var(--warn) 35%,transparent);border-top-color:var(--warn);animation:girar .9s linear infinite}
+@keyframes girar{to{transform:rotate(360deg)}}
+.acordando .btn{flex:none}
+.fila-chip{display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border-radius:9px;border:1px dashed var(--warn);background:color-mix(in srgb,var(--warn) 10%,var(--card));
+  color:var(--amarelo-txt);font:600 .82rem var(--font);cursor:pointer;white-space:nowrap}
+.fila-chip:hover{border-style:solid}
+.aviso-rascunho{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 12px;margin-bottom:14px;border-radius:10px;
+  border:1px solid color-mix(in srgb,var(--info) 55%,var(--line));background:color-mix(in srgb,var(--info) 9%,var(--card));font-size:.88rem}
+.aviso-rascunho span{flex:1;min-width:180px}
+.link-btn{background:none;border:none;padding:0;color:var(--azul-txt);font:inherit;text-decoration:underline;cursor:pointer}
+.lote-nota{color:var(--gray);font-size:.8rem}
+
+/* você hoje: números rápidos de quem está logado */
+.voce-hoje{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+.voce-hoje:empty{display:none}
+.vh-item{display:flex;align-items:baseline;gap:7px;padding:9px 14px;border-radius:11px;border:1px solid var(--line);background:var(--card);color:var(--texto);
+  cursor:pointer;font:inherit;transition:border-color .2s var(--ease),transform .2s var(--ease)}
+.vh-item b{font-family:var(--font-cond);font-size:1.45rem;line-height:1}
+.vh-item span{color:var(--gray);font-size:.82rem}
+.vh-item:hover{border-color:var(--red);transform:translateY(-2px)}
+.vh-item.alerta b{color:var(--amarelo-txt)}
+.card-sem-valor{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:20px;
+  border-color:color-mix(in srgb,var(--warn) 55%,var(--line));background:linear-gradient(120deg,color-mix(in srgb,var(--warn) 9%,var(--card)),var(--card) 60%)}
+.card-sem-valor .card-sub{margin:0}
+.sv-txt{display:flex;gap:14px;align-items:center;flex:1;min-width:240px}
+.sv-ico{font-size:1.8rem}
+.sv-acoes{display:flex;gap:8px;flex-wrap:wrap}
+
+/* diálogos largos (valores em lote, ajuda) */
+dialog.dlg.dlg-largo{width:min(880px,calc(100vw - 24px));max-height:calc(100vh - 40px)}
+.pago-sugestoes{display:flex;gap:6px;flex-wrap:wrap}
+.dv-barra{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.dv-lista{max-height:min(56vh,520px);overflow:auto;border:1px solid var(--line);border-radius:10px}
+.dv-lista thead th{position:sticky;top:0;background:var(--pop-solid);z-index:1}
+.dv-valor{width:120px;background:var(--campo-fundo);border:1px solid var(--line);border-radius:8px;padding:8px 10px;color:var(--texto);font:inherit;text-align:right}
+.dv-valor:focus{outline:2px solid var(--red);outline-offset:1px}
+.dv-sug{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}
+.mini-sug{padding:3px 8px;border-radius:7px;border:1px solid var(--line);background:var(--superficie);color:var(--texto);font-size:.76rem;cursor:pointer}
+.mini-sug:hover{border-color:var(--red)}
+dialog.dlg .dv-cort{flex-direction:row;align-items:center;gap:6px;white-space:nowrap}
+
+/* distribuir */
+.dist-grade{display:grid;grid-template-columns:1.2fr 1fr;gap:18px;margin-bottom:18px}
+.dist-grade .card{margin:0}
+.ds-grupo{border:none;padding:0;margin:0 0 14px}
+.ds-grupo legend{font:600 .78rem var(--font-cond);letter-spacing:.12em;text-transform:uppercase;color:var(--gray);margin-bottom:8px}
+.ds-grupo .filtro-pill small{opacity:.75;margin-left:3px}
+.ds-idade{display:flex;flex-direction:column;gap:6px;font-size:.88rem;color:var(--rotulo);max-width:260px;margin-bottom:10px}
+.ds-idade select{padding:9px 10px;border-radius:9px;border:1px solid var(--line);background:var(--campo-fundo);color:var(--texto)}
+.ds-gente{display:flex;flex-direction:column;gap:8px;margin-bottom:14px}
+.ds-pessoa{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;cursor:pointer;flex-wrap:wrap}
+.ds-pessoa:has(input:checked){border-color:var(--red);background:color-mix(in srgb,var(--red) 7%,var(--card))}
+.ds-pessoa input{accent-color:var(--red);width:17px;height:17px}
+.ds-pessoa small{margin-left:auto;color:var(--gray);font-size:.78rem}
+.ds-detalhe{margin:14px 0}
+.ds-detalhe summary{cursor:pointer;color:var(--azul-txt);font-size:.88rem}
+.ds-hist{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:8px}
+.ds-hist li{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;font-size:.88rem}
+.ds-hist small{display:block;color:var(--gray);margin-top:3px}
+
+/* relatórios */
+.rel-barra{flex-wrap:wrap}
+.rel-barra .periodo-datas{display:flex}
+.rel-acoes{display:flex;gap:8px;margin-left:auto}
+.motivo-row b small{color:var(--gray);font-weight:500;margin-left:4px}
+
+/* ajuda */
+.ajuda-btn{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:10px;border:1px solid var(--line);background:var(--superficie);color:var(--texto);font:600 .85rem var(--font);cursor:pointer}
+.ajuda-btn>span:first-child{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--red);color:#fff;font-size:.78rem}
+.ajuda-btn:hover{border-color:var(--red)}
+.ajuda-lista{display:flex;flex-direction:column;gap:6px;margin:12px 0;max-height:min(55vh,480px);overflow:auto}
+.ajuda-lista details{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--superficie)}
+.ajuda-lista summary{cursor:pointer;font-weight:600}
+.ajuda-lista p{margin-top:8px;color:var(--texto-suave);font-size:.9rem;line-height:1.5}
+
+/* tour */
+.tour{position:fixed;inset:0;z-index:350}
+.tour-luz{position:fixed;border-radius:12px;box-shadow:0 0 0 9999px rgba(4,4,6,.66);outline:2px solid var(--red);transition:all .25s var(--ease);pointer-events:none}
+.tour-caixa{position:fixed;padding:18px;border-radius:14px;background:linear-gradient(165deg,var(--pop-1),var(--pop-2));border:1px solid var(--line);box-shadow:var(--sombra-pop);color:var(--texto)}
+.tour-caixa h3{font-family:var(--font-cond);font-size:1.35rem;margin:4px 0 6px}
+.tour-caixa p{color:var(--texto-suave);font-size:.92rem;line-height:1.5}
+.tour-passo{color:var(--gray);font-size:.76rem;letter-spacing:.1em;text-transform:uppercase}
+.tour-acoes{display:flex;gap:8px;align-items:center;margin-top:14px}
+
+@media (max-width:860px){
+  .dist-grade{grid-template-columns:1fr}
+  .ajuda-txt{display:none}
+  .ajuda-btn{padding:8px}
+  .rel-acoes{margin-left:0}
+}
+@media (max-width:480px){
+  .acordando{top:auto;bottom:12px;flex-wrap:wrap}
+  .fila-chip{order:5;width:100%;justify-content:center}
+  .vh-item{flex:1 1 calc(50% - 10px);padding:8px 10px}
+  .tour-caixa{left:12px!important;right:12px;width:auto!important;top:auto!important;bottom:12px}
+  .dv-valor{width:96px}
+  .rel-barra .periodo-datas{flex-wrap:wrap}
+}
+@media (prefers-reduced-motion:reduce){.acordando-ico{animation:none}.tour-luz,.vh-item{transition:none}.vh-item:hover{transform:none}}
+
+/* imprimir só o relatório */
+@media print{
+  body.imprimindo-rel .sidebar,body.imprimindo-rel .topbar,body.imprimindo-rel .rel-barra,body.imprimindo-rel #saudeSistema,body.imprimindo-rel .toast,body.imprimindo-rel .acordando{display:none!important}
+  body.imprimindo-rel .view{display:none!important}
+  body.imprimindo-rel #view-relatorios{display:block!important}
+  body.imprimindo-rel{background:#fff;color:#000}
+  body.imprimindo-rel .card,body.imprimindo-rel .kpi{break-inside:avoid;box-shadow:none;border-color:#ccc;background:#fff;color:#000}
+}
+/* rodada 4: textos só para leitor de tela (.sr, absolutos) dentro das tabelas largas empurravam a página para o lado em 375 px — a caixa da tabela vira o bloco de referência e corta */
+.table-wrap{position:relative}
+.motivo-row b{white-space:nowrap}
+/* valores em lote no celular: cada venda vira um cartão (o campo do valor fica à vista, sem rolar de lado) */
+@media (max-width:600px){
+  #tblValores thead{display:none}
+  #tblValores,#tblValores tbody{display:block}
+  #tblValores tr{display:grid;grid-template-columns:1fr auto;gap:6px 10px;padding:12px;border-bottom:1px solid var(--line-2)}
+  #tblValores td{display:block;padding:0;border:none}
+  #tblValores td:first-child{grid-column:1 / -1}
+  #tblValores td.num{text-align:left}
+  .dv-lista{max-height:min(60vh,520px)}
+}

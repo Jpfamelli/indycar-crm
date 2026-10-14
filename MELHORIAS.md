@@ -508,3 +508,150 @@ Tudo conferido no servidor falso (`npm run mock`, `/?papel=…`) com puppeteer-c
 82. Ganchos de teste `POST /__mock/notificar` e `/__mock/tarefa` para o realtime.
 83. Testes novos: `testes/utils-rodada3.test.cjs` (10) e `testes/mock-rodada3.test.mjs` (8); `mock.test.mjs` passou a mandar o token.
 
+
+
+# Rodada 4 (14/10/2026)
+
+Confiabilidade com o Render dormindo, velocidade, valor pago, distribuição dos leads sem responsável, relatórios, tour e ajuda, polimento da IA. Cada linha foi conferida por `node --test` (118 testes; 22 novos em `testes/r4-servidor.test.cjs`, `testes/r4-utils.test.cjs`, `testes/r4-ia.test.cjs`) e/ou no navegador (puppeteer-core + Chrome, servidor falso com `MOCK_LEADS=700`, 1440 e 375 px, 53 verificações, zero erro de página).
+
+## Servidor dormindo (503 do Render)
+1. Faixa "O sistema está acordando… tentando de novo em N s (tentativa X de 10)" em 502/503/504 do proxy e em falha de rede, no lugar do erro cru.
+2. Espera crescente entre tentativas (2, 3, 5, 8, 12, 18, 25, 30, 30, 30 s ≈ 3 min).
+3. Botão "Tentar agora" na faixa e nova tentativa imediata quando a internet volta.
+4. Aviso "O sistema voltou (levou N s). Pode continuar." quando o servidor responde de novo.
+5. 503 do próprio CRM (JSON com "erro") não vira "acordando"; leituras tentam mais duas vezes em silêncio.
+6. Leituras repetem sempre; escritas só repetem com chave de idempotência e quando o pedido nem chegou ao servidor.
+7. Toda escrita da tela leva `x-idempotencia`, a mesma em todas as tentativas e na renovação do login.
+8. Servidor guarda a resposta de cada escrita por 10 min: o mesmo pedido repetido recebe a mesma resposta (cabeçalho `x-idempotencia-repetida`) e não cria lead duplicado.
+9. Pedido repetido enquanto o primeiro ainda roda espera o primeiro terminar, em vez de executar duas vezes.
+10. Respostas 5xx não ficam guardadas (a próxima tentativa roda de verdade).
+11. A chave vale por pessoa e por rota; chave malformada é ignorada.
+12. CORS libera o cabeçalho `x-idempotencia` para o ecossistema.
+13. Prazo próprio de quem chamou (ex.: 90 s da IA) não entra no laço de novas tentativas.
+14. `GET /api/ping` sem login, barato, com versão e hora (o boot usa para acordar o servidor).
+15. Configuração pública (URL e chave publicável do Supabase) guardada no aparelho: o login abre na hora, mesmo com o Render dormindo.
+16. O boot cutuca `/api/ping` assim que a página abre, para o servidor acordar enquanto a pessoa digita a senha.
+17. Sem configuração guardada, a busca dela também espera o servidor acordar (com a faixa), em vez de "não consegui falar com o servidor".
+18. Boot espera todos os scripts carregarem antes de entrar (achado no teste: com a configuração guardada, entrava antes de equipe.js e rodada4.js).
+19. Mudança de etapa sem servidor entra numa fila e a tela já mostra a etapa nova.
+20. Chip "N alterações esperando o servidor" no topo; clique tenta enviar na hora.
+21. Fila reenviada sozinha quando o servidor volta (ping a cada 20 s e evento "voltou").
+22. Dois PATCH do mesmo lead na fila viram um só (o mais novo vence campo a campo), com a mesma chave.
+23. Fila em sessionStorage: não vai para outro aparelho e some ao fechar a aba.
+24. Erro definitivo ao reenviar (ex.: 4xx) avisa com o nome do lead e sai da fila.
+25. Sair com alterações na fila pergunta antes; sair limpa a fila e os rascunhos do aparelho.
+26. Rascunho do formulário do lead salvo a cada digitação (sessionStorage).
+27. Reabrir o lead (mesmo depois de recarregar a página) oferece "Recuperar" ou "Descartar" o rascunho.
+28. Rascunho com mais de 24 h, igual ao salvo ou mais velho que a última gravação do lead é descartado.
+29. Fechar a aba com algo por salvar ou na fila: o navegador pergunta antes.
+30. Falha ao salvar com o servidor dormindo mantém a gaveta aberta e diz para clicar em Salvar de novo.
+31. Botão Salvar mostra "Salvando…" enquanto espera.
+32. Service worker v6: a casca (HTML, CSS, JS) sai do cache quando a rede passa de 3,5 s.
+33. Service worker: 503 do Render na navegação ou nos arquivos usa a casca guardada.
+34. Service worker: biblioteca do Supabase (endereço com versão) e fontes ficam em cache próprio.
+35. Service worker com os arquivos novos (crm-r4.js, rodada4.js) na lista que instala.
+36. keep-alive do servidor maior que o do proxy (65 s), contra 502 por conexão reaproveitada.
+37. Painel da IA (crm-ia.js) passa a usar o mesmo pedido da tela: espera o servidor, renova o login e usa idempotência (`window.IndyCar.pedir`).
+
+## Velocidade
+38. JSON acima de 1 KB comprimido com br/gzip (a lista de leads cai a ~10%).
+39. Arquivos estáticos comprimidos uma vez e guardados em memória por versão.
+40. ETag nos estáticos: sem mudança, o navegador recebe 304 só com cabeçalhos.
+41. Estáticos aceitam só GET/HEAD (405 no resto).
+42. CSP da página calculada uma vez por versão do index.html.
+43. `/api/leads` com colunas explícitas (sem `select *`) e ordem estável na paginação.
+44. Cache de 8 s da base de leads, esquecido em toda gravação; pedidos simultâneos dividem a mesma leitura.
+45. Filtros de etapa, origem e responsável do servidor aplicados em memória sobre o cache.
+46. Clientes lidos de 1.000 em 1.000: a base tem 2.464 e a busca não achava ninguém depois do milésimo.
+47. Base de clientes com cache de 30 s, esquecido em qualquer gravação: a busca por letra não relê três tabelas.
+48. A tela não pede mais `/api/stats` ao abrir (lia a base inteira só para saber etapas e origens).
+49. Aba Origem calculada na tela com os leads já carregados.
+50. Filtros de etapa, origem, "só parados" e "limpar" refazem a lista na tela, sem baixar tudo de novo.
+51. Busca com índice normalizado guardado por lead (não normaliza os mesmos campos a cada tecla).
+52. Saúde do ecossistema pedida depois dos leads (não atrasa a primeira pintura).
+
+## Valor pago
+53. Concluir um lead pede o valor já preenchido com a sugestão (orçado, Agenda ou Orçador), com botões de cada sugestão.
+54. Dica no diálogo quando não há orçamento registrado.
+55. Botão "Foi cortesia": grava zero e marca "Cortesia: sem cobrança" na observação.
+56. Zero digitado conta como cortesia (o lead sai da lista de "sem valor").
+57. Valor aceita vírgula.
+58. Concluir pela edição da ficha usa o mesmo diálogo, com cortesia.
+59. Card no painel "N vendas concluídas sem valor pago" (gestor: todas; atendente: as dele).
+60. "Ver na lista" abre os concluídos sem valor (atendente: os dele).
+61. Filtro "Concluídos sem valor" na lista de leads, guardado com os outros filtros.
+62. `GET /api/leads/sem-valor` com sugestões da Agenda (valor do agendamento) e do Orçador (orçamento não recusado).
+63. Atendente vê só os concluídos dele nessa rota.
+64. "Preencher agora" (gestor): tabela com sugestões clicáveis, "usar as sugestões nos vazios" e cortesia por linha.
+65. Servidor valida o lote (R$ 0,01 a 10 milhões, sem repetidos, até 300) e só grava o que continua concluído e sem valor, dizendo o motivo de cada pulado.
+66. "Desfazer" o lote volta só onde ninguém mexeu depois.
+67. Auditoria `valores_lote` e `valores_lote_desfeito` (quantidade, total, cortesias).
+68. No celular o lote vira cartões com o campo do valor à vista.
+69. Atendente que tenta o lote recebe 403 com "peça ao gestor ou preencha na ficha".
+
+## Distribuir leads sem responsável (gestor)
+70. Aba "Distribuir" para gestor/admin (atalho G B).
+71. Filtros por etapa e origem com a contagem de leads sem dono em cada um, e por idade (até 7, 7–30, 30–90, mais de 7/30/90 dias).
+72. Só entram leads sem responsável; quem já tem dono continua com ele.
+73. Lista de quem recebe com a carga atual (leads abertos); marcados por padrão os que recebem leads no rodízio.
+74. Dois jeitos de dividir: partes iguais (cada um recebe um pouco de cada etapa) ou igualar a carga.
+75. Prévia por pessoa (quantos recebe, por etapa, abertos depois) e lead por lead.
+76. Gravar pede confirmação; o servidor só atribui quem continua sem dono (o que alguém pegou no meio fica com quem pegou).
+77. Servidor recusa pessoa sem acesso ao CRM (ex.: papel agenda), lead repetido e mais de 1.000 por vez.
+78. O gatilho do banco mandaria uma notificação por lead (centenas): o CRM troca por um aviso só por pessoa ("Você recebeu N leads").
+79. O aviso abre direto "Meus leads" (`/?meus=1`).
+80. Histórico das últimas 10 distribuições com "Desfazer".
+81. Desfazer devolve só os leads que continuam com quem recebeu; repetir o desfazer dá 409.
+82. Toast com "Desfazer" logo depois de gravar.
+83. Tabela `crm_distribuicoes` (migração `crm_distribuicoes_v1`): RLS ligado, sem acesso de anon/authenticated, índices nas chaves estrangeiras; advisor sem aviso novo além do padrão das tabelas crm_.
+84. Auditoria `distribuir_leads` e `distribuir_desfeita`.
+85. Atendente não vê Distribuir; link direto volta ao painel.
+
+## Relatórios (gestor)
+86. Aba "Relatórios" para gestor/admin (atalho G R).
+87. Períodos: este mês, mês passado, 30 e 90 dias, ou datas livres (até 2 anos).
+88. Indicadores: leads novos, quantos agendaram, vendas, perdas, conversão, faturamento, ticket, tempo de resposta, dias até fechar e vendas sem valor.
+89. Funil do período: até onde as entradas chegaram, com a taxa de passagem de cada etapa.
+90. Conversão por origem: leads, agendaram, vendas, perdas, conversão, faturamento e ticket.
+91. Conversão e tempo de resposta por vendedor (sem responsável por último).
+92. Motivos de perda com quantidade e porcentagem.
+93. `GET /api/desempenho?livre=1&de=&ate=` (intervalo livre no fuso de São Paulo, até 2 anos).
+94. Exportar CSV com todas as seções (BOM, ponto e vírgula), registrado na auditoria como "relatorio".
+95. Imprimir / PDF só do relatório.
+
+## Mais gente usando
+96. "Você hoje" no painel: meus abertos, parados, tarefas de hoje, vendas no mês, sem valor e (gestor) sem responsável — cada número abre o filtro certo.
+97. Tour de boas-vindas por papel (atendente 5 passos, gestor 8), pula o que não está na tela.
+98. Tour: foco no "Próximo", Tab preso na caixa, Esc fecha; no celular vira uma faixa embaixo.
+99. Tour visto fica em `perfis.preferencias.crm_tour` (vale em qualquer aparelho) e no aparelho.
+100. Ajuda curta "Como faço…" por papel, com "Rever o tour" e "Atalhos de teclado".
+101. Botão "Ajuda" na barra lateral e no menu do perfil; a tecla ? abre a ajuda.
+102. Lista vazia em "Meus leads" ensina: ver os sem responsável e "Pegar para mim" (gestor: ir para Distribuir).
+103. Estados vazios para base sem leads e para "concluídos sem valor".
+104. Barra de seleção avisa o atendente que passar em lote é do gestor.
+105. Ajuda explica a faixa "acordando" (servidor gratuito dorme e nada se perde).
+
+## IA do CRM
+106. Avaliada com 10 leads reais (5 etapas) em modo "sugerir": 20 chamadas, 0 erros, nada gravado (ia_acoes ficou em memória, outras escritas barradas).
+107. Achado: a IA escrevia "há 995h". Os dados agora mandam dias acima de 48 h.
+108. Justificativa e motivo convertem horas acima de 48 em dias (sem mexer em "8h" ou "17h30").
+109. Achado: "Indy Car", "Indycar" e "IndyCar" na mesma rodada. Texto ao cliente padroniza "IndyCar".
+110. Achado: "Oi, Família!" (nome de cadastro). Cumprimento com nome que não é de pessoa vira "Oi!".
+111. Prompt: mensagem de até 3 frases curtas, nome só se for de pessoa, horário de funcionamento só ao propor dia.
+112. Sinal `etapaDesatualizada` ("agendado" sem horário futuro) e a data de hoje nos dados.
+113. Segunda rodada real com os mesmos 10 leads: todas em dias, "IndyCar" em todos os textos, "Oi! Tudo bem?" no cadastro "Família", mensagens mais curtas.
+
+## Polimento
+114. Origem "telefone" com nome e cor (aparecia crua).
+115. Aba Origem escapa o rótulo e tem cor de reserva.
+116. 375 px: textos só para leitor de tela dentro das tabelas empurravam a lista de leads 583 px para o lado; a caixa da tabela agora corta.
+117. Componentes novos no tema claro e no escuro, só com as variáveis da casa.
+118. Movimento reduzido: girador da faixa e animações novas param.
+119. Número dos motivos de perda não quebra linha.
+120. Servidor falso: `MOCK_LEADS`, `MOCK_DORMINDO`, `POST /__mock/dormir`, `?tour=1`, idempotência e as rotas novas; o tour fica escondido por padrão (não atrapalha o E2E de telas).
+121. Testes: 7 do servidor (ping, compressão, ETag, idempotência, clientes > 1.000, valor pago, distribuição, desempenho livre), 10 das funções puras e 5 da IA.
+
+## Como foi verificado
+- `npm test`: 118 passando; `npm run segredos`: nada; `npm audit`: 0 vulnerabilidades.
+- Navegador (puppeteer-core + Chrome) no servidor falso: 43 verificações em 1440/375 px (painel, valores em lote, distribuir/desfazer, relatórios, ajuda, acordando e volta, fila e reenvio, cortesia, rascunho após recarregar, tour do atendente em 375, 375 sem rolagem lateral) + 10 de teclado, tema claro e movimento reduzido.
+- Banco real: só leitura (contagens: 589 leads sem responsável, 95 concluídos sem valor) e a migração aditiva `crm_distribuicoes_v1`; avaliação da IA sem gravar nada.

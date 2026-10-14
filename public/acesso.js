@@ -302,6 +302,7 @@ $('#menuPerfil').addEventListener('click', async e => {
   if (acao === 'notif') irParaConta('#cardNotif');
   if (acao === 'tarefas') { irPara('dashboard'); $('#cardTarefas').scrollIntoView({block: 'start'}); $('#tarefaTexto').focus(); }
   if (acao === 'tema') $('#btnTema').click();
+  if (acao === 'ajuda') window.abrirAjuda?.();
   if (acao === 'sair') sair('local');
   if (acao === 'sairTodos') sair('global');
 });
@@ -490,14 +491,38 @@ function bipe() {
     o.connect(g).connect(AUDIO.destination); o.start(); o.stop(AUDIO.currentTime + .26); } catch { /* sem áudio */ }
 }
 
+/* ---------------- configuração com espera (rodada 4) ---------------- */
+const LS_CONFIG = 'indycar_crm_config';
+async function buscarConfig() {
+  const esperas = CrmR4.esperasAcordar();
+  for (let i = 0; ; i++) {
+    let status = 0, corpo = null;
+    try { const r = await fetch('/api/config', {cache: 'no-store', signal: AbortSignal.timeout(25000)}); status = r.status; try { corpo = await r.json(); } catch { /* sem JSON */ } } catch { /* rede */ }
+    if (status === 200 && corpo && 'configurado' in corpo) { servidorRespondeu(); return corpo; }
+    if (i >= esperas.length) return null;
+    mostrarAcordando(i + 1, esperas.length, esperas[i]); await esperarAcordar(esperas[i]);
+  }
+}
+async function carregarConfig() {
+  const salvo = lerLS(LS_CONFIG, null);
+  const valido = c => c && c.configurado && /^https?:\/\//.test(c.supabaseUrl || '') && typeof c.supabaseAnonKey === 'string';
+  const atualizar = buscarConfig().then(c => { if (valido(c)) gravarLS(LS_CONFIG, {configurado: true, supabaseUrl: c.supabaseUrl, supabaseAnonKey: c.supabaseAnonKey, iaConfigurada: !!c.iaConfigurada}); return c; });
+  if (valido(salvo)) { atualizar.catch(() => {}); return salvo; }
+  return atualizar;
+}
+
 /* ---------------- boot ---------------- */
 (async function iniciar() {
   mostrarLogin();                       // capa primeiro: nada vaza antes da senha
-  try {
-    CONFIG = await (await fetch('/api/config')).json();
-  } catch {
-    return mostrarLogin('Não consegui falar com o servidor. Confira a internet e recarregue a página.');
-  }
+  /* Rodada 4: com a configuração guardada o boot não espera a rede — então espera
+     os outros scripts (equipe.js, rodada4.js) terminarem de carregar antes de entrar. */
+  if (document.readyState === 'loading') await new Promise(r => document.addEventListener('DOMContentLoaded', r, {once: true}));
+  /* Rodada 4: a configuração (endereço e chave PÚBLICA do Supabase) fica guardada
+     no aparelho. Com o Render dormindo, o login abre na hora (fala direto com o
+     Supabase) e o servidor acorda enquanto a pessoa digita a senha. */
+  fetch('/api/ping', {cache: 'no-store'}).catch(() => {});   // já cutuca o servidor
+  CONFIG = await carregarConfig();
+  if (!CONFIG) return mostrarLogin('Não consegui falar com o servidor depois de 3 minutos. Confira a internet e recarregue a página.');
   if (!CONFIG.configurado) {
     return mostrarLogin('Falta configurar o Supabase no servidor (SUPABASE_URL, '
       + 'SUPABASE_ANON_KEY e SUPABASE_SERVICE_ROLE_KEY).');
