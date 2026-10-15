@@ -791,6 +791,12 @@ const server = http.createServer(async (req, res) => {
         }
         const sb = adminSupabase();
         if (!sb) return json(res, 503, { erro: 'Servidor sem a chave do banco configurada.' });
+        /* As preferências são compartilhadas pelos apps (tema, tour, avisos de cada um):
+           SOMA às que já existem, nunca substitui o objeto inteiro. */
+        if (patch.preferencias) {
+          const { data: atual } = await sb.from('perfis').select('preferencias').eq('id', quem.id).maybeSingle();
+          patch.preferencias = require('./public/crm-utils.js').mesclarPreferencias(atual?.preferencias || {}, patch.preferencias);
+        }
         const { error } = await sb.from('perfis').update(patch).eq('id', quem.id);
         if (error) return json(res, 503, { erro: 'Não consegui salvar o seu perfil.' });
         acesso().esquecer(quem.id);

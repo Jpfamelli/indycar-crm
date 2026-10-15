@@ -656,3 +656,4 @@ Confiabilidade com o Render dormindo, velocidade, valor pago, distribuição dos
 - `npm test`: 118 passando; `npm run segredos`: nada; `npm audit`: 0 vulnerabilidades.
 - Navegador (puppeteer-core + Chrome) no servidor falso: 43 verificações em 1440/375 px (painel, valores em lote, distribuir/desfazer, relatórios, ajuda, acordando e volta, fila e reenvio, cortesia, rascunho após recarregar, tour do atendente em 375, 375 sem rolagem lateral) + 10 de teclado, tema claro e movimento reduzido.
 - Banco real: só leitura (contagens: 589 leads sem responsável, 95 concluídos sem valor) e a migração aditiva `crm_distribuicoes_v1`; avaliação da IA sem gravar nada.
+123. PATCH /api/perfil soma as preferências às que já existem (antes substituía o objeto e apagava tema/tour/avisos guardados pelos outros apps).
