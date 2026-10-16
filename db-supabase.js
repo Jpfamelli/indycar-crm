@@ -508,14 +508,22 @@ module.exports.leadsPorTelefone = async function(telefone) {
   const vs = new Set([local]);
   if (local.length === 11 && local[2] === '9') vs.add(local.slice(0, 2) + local.slice(3));
   if (local.length === 10) vs.add(local.slice(0, 2) + '9' + local.slice(2));
-  const [{ data: cli, error: e1 }, { data: ls, error: e2 }] = await Promise.all([
-    sb.from('clientes').select('id,nome,telefone,carro_modelo,placa').in('telefone_e164', [...vs]).limit(1),
-    sb.from('leads').select('id,cliente_id,nome,telefone,status,origem,servico,created_at,updated_at').like('telefone', `%${chave}`).order('created_at', { ascending: false }).limit(20),
-  ]);
-  erro('leadsPorTelefone/cliente', e1); erro('leadsPorTelefone/leads', e2);
+  /* Rodada 5: `leads.telefone_e164` (coluna gerada + índice) no lugar do `like` pelos
+     8 finais — casa só o número inteiro e não varre a tabela. Leads antigos ligados
+     pelo cliente_id (telefone digitado diferente) entram pela segunda consulta. */
+  const { data: cli, error: e1 } = await sb.from('clientes').select('id,nome,telefone,carro_modelo,placa').in('telefone_e164', [...vs]).limit(1);
+  erro('leadsPorTelefone/cliente', e1);
   const cliente = (cli || [])[0] || null;
-  // o like pelos 8 finais pode trazer outro DDD: confere o número inteiro
-  const leads = (ls || []).filter(l => { const x = String(l.telefone ?? '').replace(/\D/g, ''); const y = (x.length >= 12 && x.startsWith('55')) ? x.slice(2) : x; return vs.has(y) || (cliente && l.cliente_id === cliente.id); });
+  const COLS = 'id,cliente_id,nome,telefone,status,origem,servico,created_at,updated_at';
+  const [{ data: porTel, error: e2 }, { data: porCli, error: e3 }] = await Promise.all([
+    sb.from('leads').select(COLS).in('telefone_e164', [...vs]).order('created_at', { ascending: false }).limit(20),
+    cliente ? sb.from('leads').select(COLS).eq('cliente_id', cliente.id).order('created_at', { ascending: false }).limit(20) : Promise.resolve({ data: [], error: null }),
+  ]);
+  erro('leadsPorTelefone/leads', e2); erro('leadsPorTelefone/leads-cliente', e3);
+  const vistos = new Set();
+  const leads = [...(porTel || []), ...(porCli || [])].filter(l => !vistos.has(l.id) && vistos.add(l.id))
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+  void chave;
   const aberto = leads.find(l => !['concluido', 'perdido'].includes(l.status)) || null;
   return { cliente, leads, aberto };
 };

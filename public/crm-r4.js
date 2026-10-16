@@ -178,7 +178,8 @@
     const porVendedor = agrupar(l => l.responsavel_id ? String(l.responsavel_id) : '').map(x => ({ ...x, nome: x.chave ? (nomes.get(x.chave) || 'Fora da equipe') : 'Sem responsável' }))
       .sort((a, b) => (a.chave === '') - (b.chave === '') || b.faturamento - a.faturamento || b.ganhos - a.ganhos || b.leads - a.leads);
     const mot = {};
-    for (const l of perdidos) { const k = motivoDe(l.observacoes) || 'Sem motivo registrado'; mot[k] = (mot[k] || 0) + 1; }
+    const padrao = (root && root.CrmUtils && root.CrmUtils.motivoPadrao) || (typeof require === 'function' ? require('./crm-utils').motivoPadrao : (x => x));
+    for (const l of perdidos) { const k = padrao(motivoDe(l.observacoes)) || 'Sem motivo registrado'; mot[k] = (mot[k] || 0) + 1; }
     const motivos = Object.entries(mot).map(([motivo, qtd]) => ({ motivo, qtd, pct: perdidos.length ? Math.round(qtd / perdidos.length * 100) : 0 })).sort((a, b) => b.qtd - a.qtd || a.motivo.localeCompare(b.motivo));
     const ciclos = ganhos.map(l => (ms(fechouEm(l)) - ms(l.created_at)) / DIA).filter(x => Number.isFinite(x) && x >= 0);
     return { totais: { ...linhaNumeros(entraram, ganhos, perdidos), perdidosDasEntradas, cicloMedio: ciclos.length ? Math.round(ciclos.reduce((s, x) => s + x, 0) / ciclos.length * 10) / 10 : null },
@@ -205,7 +206,7 @@
       { alvo: '#btnSino', titulo: 'Avisos', texto: 'Lead passado para você, cliente esperando e tarefas novas chegam no sino.' },
     ];
     const extra = gestor ? [
-      { alvo: '.nav-item[data-view="distribuir"]', titulo: 'Distribuir leads', texto: 'Divida os leads sem responsável entre a equipe, veja a prévia antes de gravar e desfaça se precisar.' },
+      { alvo: '.nav-item[data-view="distribuir"]', titulo: 'Leads sem dono', texto: 'Quem está sem responsável, com um rodízio sugerido para aplicar em um clique (auditado, com desfazer) e a distribuição manual com prévia.' },
       { alvo: '.nav-item[data-view="relatorios"]', titulo: 'Relatórios', texto: 'Funil, conversão por origem e por vendedor, tempo de resposta e motivos de perda — com exportação.' },
       { alvo: '#cardSemValor', titulo: 'Vendas sem valor', texto: 'Concluídos sem o valor pago deixam o faturamento vazio. Preencha vários de uma vez por aqui.' },
     ] : [];
@@ -221,11 +222,16 @@
       ['Como crio um lembrete?', 'Na ficha do lead, aba Tarefas, ou no card "Minhas tarefas" do Dashboard.'],
       ['O sistema mostrou "acordando". E agora?', 'O servidor gratuito dorme quando ninguém usa. Espere: ele tenta sozinho por até 3 minutos e o que você digitou não se perde.'],
       ['Não consigo apagar um lead.', 'Apagar é só do gestor. Peça a ele, ou marque como perdido com o motivo.'],
+      ['Como acho um cliente rápido?', 'Ctrl+K abre a busca global: digite parte do nome, o final do telefone ou a placa. Procura em leads e na base de clientes.'],
+      ['Como vejo tudo de um cliente?', 'Clientes › clique na pessoa (ou Ficha 360 no lead): conversa, horários, carro no pátio, orçamentos, mensagens do Comunicar, tarefas e indicações, tudo numa tela.'],
+      ['Como guardo um filtro que uso sempre?', 'Na lista de leads, monte os filtros e clique em "Salvar filtro". Ele aparece em "Filtros salvos" em qualquer aparelho.'],
+      ['Como mando uma mensagem para vários leads?', 'Selecione na lista e use "Campanha no Comunicar". A campanha nasce como proposta; o gestor aprova lá antes de sair.'],
     ];
     if (gestor) lista.push(
       ['Como divido os leads antigos?', 'Menu "Distribuir": filtre, marque quem recebe, confira a prévia e grave. Dá para desfazer.'],
       ['Como preencho os valores que faltam?', 'No Dashboard, card "Vendas sem valor" → "Preencher agora".'],
       ['Como exporto os números?', 'Menu "Relatórios": escolha o período e use "Exportar CSV" ou "Imprimir".'],
+      ['E os leads sem dono?', 'Menu "Leads sem dono": veja quantos são, por etapa e idade, e aplique o rodízio sugerido com um clique (auditado, com desfazer).'],
     );
     return lista.map(([p, r]) => ({ pergunta: p, resposta: r }));
   }

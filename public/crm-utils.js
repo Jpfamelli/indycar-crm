@@ -25,8 +25,20 @@
     if ('status' in d && !['novo','contato','orcamento','agendado','em_servico','concluido','perdido'].includes(d.status)) return 'Etapa inválida.';
     if ('origem' in d && !['meta','google','indicacao','organico','whatsapp','passagem','telefone'].includes(d.origem)) return 'Origem inválida.';
     if (d.placa && !/^[A-Z]{3}[0-9][A-Z0-9][0-9]{2}$/i.test(normalizar(d.placa))) return 'Confira a placa: ABC1234 ou ABC1D23.';
-    for (const k of ['observacoes','servico','carro_modelo','utm_campaign']) if (k in d && (typeof d[k] !== 'string' || d[k].length > (k === 'observacoes' ? 4000 : 200))) return 'Texto maior que o permitido.';
+    for (const k of ['observacoes','servico','carro_modelo','utm_campaign','utm_source','utm_medium']) if (k in d && d[k] !== null && (typeof d[k] !== 'string' || d[k].length > (k === 'observacoes' ? 4000 : 200))) return 'Texto maior que o permitido.';
     return null;
+  }
+  /* Rodada 5: origem detalhada do lead (origem + utm) numa frase curta para a ficha e a lista. */
+  const ROTULO_UTM = {facebook: 'Facebook', instagram: 'Instagram', ig: 'Instagram', fb: 'Facebook', google: 'Google', site: 'Site', area_cliente: 'Área do Cliente', whatsapp: 'WhatsApp', indicacao: 'Indicação'};
+  function origemDetalhada(l, rotuloOrigem) {
+    if (!l) return '';
+    const base = rotuloOrigem ? rotuloOrigem(l.origem) : String(l.origem || '');
+    const src = String(l.utm_source || '').trim().toLowerCase(), med = String(l.utm_medium || '').trim(), camp = String(l.utm_campaign || '').trim();
+    const partes = [];
+    if (src && src !== String(l.origem || '').toLowerCase()) partes.push(ROTULO_UTM[src] || l.utm_source);
+    if (med) partes.push(med);
+    if (camp) partes.push('campanha ' + camp);
+    return partes.length ? base + ' · ' + partes.join(' · ') : base;
   }
   function nascimento(v) {
     if (v === '' || v === null) return null;
@@ -97,7 +109,7 @@
     for (const l of entraram) linha(l.origem || 'organico').leads++;
     for (const l of ganhos) { const o = linha(l.origem || 'organico'); o.ganhos++; o.faturamento += num(l.valor_pago); }
     const motivos = {};
-    for (const l of perdidos) { const m = motivoPerda(l.observacoes) || 'Sem motivo registrado'; motivos[m] = (motivos[m] || 0) + 1; }
+    for (const l of perdidos) { const m = motivoPadrao(motivoPerda(l.observacoes)) || 'Sem motivo registrado'; motivos[m] = (motivos[m] || 0) + 1; }
     return {
       entradas: entraram.length, ganhos: ganhos.length, perdidos: perdidos.length, faturamento,
       ticket: ganhos.length ? Math.round(faturamento / ganhos.length * 100) / 100 : 0,
@@ -126,13 +138,30 @@
     const linha = 'Motivo da perda: ' + m;
     return ((limpo ? limpo.slice(0, 4000 - linha.length - 1) + '\n' : '') + linha);
   }
+  /* Rodada 5: texto livre do motivo → um dos 7 motivos padrão (mesma regra do servidor, lib/rodada5.js). */
+  const MOTIVOS_PERDA = ['Achou caro', 'Foi em outra oficina', 'Sem retorno do cliente', 'Desistiu do serviço', 'Não fazemos o serviço', 'Prazo não atendeu', 'Outro'];
+  function motivoPadrao(t) {
+    const s = String(t ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    if (!s.trim()) return null;
+    if (/caro|preco|valor|dinheiro|orcamento alto|barato/.test(s)) return 'Achou caro';
+    if (/outra oficina|concorr|fez em outro|outro lugar|outra loja/.test(s)) return 'Foi em outra oficina';
+    if (/sem retorno|nao respond|sumiu|nao atend|silencio|parou de responder/.test(s)) return 'Sem retorno do cliente';
+    if (/desist|nao quer|mudou de ideia|vendeu o carro|nao vai fazer/.test(s)) return 'Desistiu do serviço';
+    if (/nao fazemos|nao trabalhamos|fora do escopo|nao atendemos/.test(s)) return 'Não fazemos o serviço';
+    if (/prazo|demor|tempo|urgen|amanh|pra hoje|para hoje|rapid|data/.test(s)) return 'Prazo não atendeu';
+    const exato = MOTIVOS_PERDA.find(m => m.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase() === s.trim());
+    return exato || 'Outro';
+  }
   /* Telefone em links: wa.me exige DDI; tel: aceita com +55. */
   function telE164(v) { let d = digitos(v); if (d.length === 12 || d.length === 13) d = d.replace(/^55/, ''); return d.length === 10 || d.length === 11 ? d : ''; }
   const linkWhatsApp = v => telE164(v) ? 'https://wa.me/55' + telE164(v) : '';
   const linkLigar = v => telE164(v) ? 'tel:+55' + telE164(v) : '';
-  const linkConversa = v => telE164(v) ? 'https://indycar-atendimento.onrender.com/?tel=' + telE164(v) : '';
-  const linkComunicar = v => 'https://indycar-posvenda.onrender.com/' + (telE164(v) ? '?tel=' + telE164(v) : '');
-  const linkAgenda = v => 'https://indycar-agendamentos.onrender.com/' + (telE164(v) ? '?tel=' + telE164(v) : '');
+  /* rodada 5: os endereços vêm de apps.js quando ele está na página (solto ou Central); no Node ficam os fixos */
+  const APPS = () => (root && root.IndyCarApps) || null;
+  const linkApp = (app, caminho) => { const A = APPS(); if (A) return A.urlApp(app, caminho) || ''; const b = URL_APPS[app]; return b ? b + caminho : ''; };
+  const linkConversa = v => telE164(v) ? linkApp('atendimento', '/?tel=' + telE164(v)) : '';
+  const linkComunicar = v => linkApp('comunicar', '/' + (telE164(v) ? '?tel=' + telE164(v) : ''));
+  const linkAgenda = v => linkApp('agenda', '/' + (telE164(v) ? '?tel=' + telE164(v) : ''));
   function formatarTelefone(v) {
     const d = telE164(v); if (!d) return String(v ?? '').trim();
     return d.length === 11 ? `(${d.slice(0,2)}) ${d.slice(2,7)}-${d.slice(7)}` : `(${d.slice(0,2)}) ${d.slice(2,6)}-${d.slice(6)}`;
@@ -201,7 +230,7 @@
     return {id: 't' + agora.getTime().toString(36) + Math.random().toString(36).slice(2, 6), texto, para: d.para || '', leadId: d.leadId ? String(d.leadId) : '', leadNome: String(d.leadNome || '').slice(0, 120), feita: false, criada: agora.toISOString()};
   }
   /* Colunas da lista de leads que a pessoa pode ligar e desligar. */
-  const COLUNAS_LEADS = ['cliente','carro','servico','origem','valor','status','responsavel','etapa','entrada','campanha'];
+  const COLUNAS_LEADS = ['cliente','carro','servico','origem','fonte','valor','status','responsavel','etapa','entrada','campanha'];
   const COLUNAS_PADRAO = ['cliente','carro','servico','origem','valor','status','responsavel','etapa','entrada'];
   function colunasValidas(lista) {
     const ok = Array.isArray(lista) ? COLUNAS_LEADS.filter(c => lista.includes(c)) : [];
@@ -279,12 +308,17 @@
   function linkNotificacao(n, atual = 'crm') {
     const link = String((n && n.link) || '').trim(), app = (n && n.app) || atual;
     if (!link) return {interno: null, url: null};
+    const A = APPS();
+    const baseDe = a => A ? A.urlApp(a, '/') : (URL_APPS[a] ? URL_APPS[a] + '/' : null);
+    const origemBase = typeof location !== 'undefined' && location.origin && location.origin !== 'null' ? location.origin : 'https://indycar-crm.onrender.com';
     let u;
-    try { u = new URL(link, (URL_APPS[app] || URL_APPS[atual]) + '/'); } catch { return {interno: null, url: null}; }
-    const permitido = Object.values(URL_APPS).some(b => new URL(b).origin === u.origin);
-    if (!permitido || !/^https:$/.test(u.protocol)) return {interno: null, url: null};
+    try { u = new URL(link, new URL(baseDe(app) || baseDe(atual), origemBase)); } catch { return {interno: null, url: null}; }
+    const origens = new Set(Object.keys(URL_APPS).map(a => { try { return new URL(baseDe(a), origemBase).origin; } catch { return null; } }).filter(Boolean));
+    const permitido = origens.has(u.origin);
+    if (!permitido || !/^https?:$/.test(u.protocol) || (u.protocol === 'http:' && !/^(localhost|127\.0\.0\.1)$/.test(u.hostname))) return {interno: null, url: null};
     const lead = u.searchParams.get('lead');
-    const mesmo = u.origin === new URL(URL_APPS[atual]).origin;
+    const propria = new URL(baseDe(atual), origemBase);
+    const mesmo = u.origin === propria.origin && (!A || !A.CENTRAL || u.pathname.startsWith(propria.pathname));
     if (mesmo && lead && ehUuid(lead)) return {interno: {lead}, url: u.href};
     if (mesmo && u.search) return {interno: {busca: u.search}, url: u.href};
     return {interno: null, url: u.href};
@@ -461,7 +495,7 @@
     if (s < 86400) return Math.floor(s / 3600) + ' h';
     const d = Math.floor(s / 86400); return d === 1 ? 'ontem' : d + ' dias';
   }
-  const api = {normalizar,digitos,buscar,validarLead,nascimento,moeda,csv,ETAPAS,ABERTAS,LIMITE_PARADO,valorLead,diasNaEtapa,parado,textoDias,resumoColuna,periodo,metricas,funilPassagem,comparar,motivoPerda,comMotivoPerda,telE164,linkWhatsApp,linkLigar,linkConversa,linkComunicar,linkAgenda,formatarTelefone,paginar,linhaDoTempo,casaOrigem,situacaoTarefa,ordenarTarefas,novaTarefa,COLUNAS_LEADS,COLUNAS_PADRAO,colunasValidas,ATALHOS_ABA,
+  const api = {normalizar,digitos,buscar,validarLead,origemDetalhada,MOTIVOS_PERDA,motivoPadrao,nascimento,moeda,csv,ETAPAS,ABERTAS,LIMITE_PARADO,valorLead,diasNaEtapa,parado,textoDias,resumoColuna,periodo,metricas,funilPassagem,comparar,motivoPerda,comMotivoPerda,telE164,linkWhatsApp,linkLigar,linkConversa,linkComunicar,linkAgenda,formatarTelefone,paginar,linhaDoTempo,casaOrigem,situacaoTarefa,ordenarTarefas,novaTarefa,COLUNAS_LEADS,COLUNAS_PADRAO,colunasValidas,ATALHOS_ABA,
     ehUuid,PAPEIS,ROTULO_PAPEL,ehGestor,URL_APPS,NOME_APPS,acessoApp,appsPermitidos,acaoErroAcesso,mensagemLogin,esperaLogin,validarNovaSenha,codigoMfaValido,linkNotificacao,CORES_AVATAR,corAvatar,filtroResponsavel,funilPorResponsavel,vencimentoDe,situacaoTarefaDb,ordenarTarefasDb,agruparTarefas,validarTarefa,lembreteParaTarefa,ROTULO_PRIORIDADE,mesAtual,intervaloMes,progressoMeta,CAMPOS_META,validarMetas,normalizarMetas,normalizarDesempenho,normalizarEquipe,podeReatribuir,ordenarDesempenho,deveGravarAcesso,mesclarPreferencias,tempoRelativo};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.CrmUtils = api;

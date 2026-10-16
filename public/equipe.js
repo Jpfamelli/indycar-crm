@@ -50,7 +50,8 @@ function preencherSelectsResp() {
   const salvo = lerLS(LS_RESP, null);
   // padrão para atendente: "Meus leads"; gestor começa vendo todos
   const padrao = SOU_GESTOR ? '' : 'meus';
-  const filtro = sel => `<option value="">Todos os responsáveis</option><option value="meus">Meus leads</option><option value="sem">Sem responsável</option><optgroup label="Pessoa">${EQUIPE.map(p => `<option value="${esc(p.id)}">${esc(p.nome)}</option>`).join('')}</optgroup>`;
+  const semDono = TODOS.filter(l => !l.responsavel_id && U.ABERTAS.includes(l.status)).length;
+  const filtro = sel => `<option value="">Todos os responsáveis</option><option value="meus">Meus leads</option><option value="sem">Sem responsável${semDono ? ` (${semDono})` : ''}</option><optgroup label="Pessoa">${EQUIPE.map(p => `<option value="${esc(p.id)}">${esc(p.nome)}</option>`).join('')}</optgroup>`;
   for (const [id, chave] of [['#fResp', 'lista'], ['#fRespFunil', 'funil']]) {
     const el = $(id), atual = el.dataset.pronto ? el.value : (salvo && chave in salvo ? salvo[chave] : padrao);
     el.innerHTML = filtro();

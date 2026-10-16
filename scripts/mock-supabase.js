@@ -91,7 +91,7 @@
       maybeSingle() { q.unico = 'maybe'; return api; },
       then(ok, falha) {
         if (!ss.get('sessao', false)) return Promise.resolve({data: null, error: {message: 'JWT expired', code: 'PGRST301'}}).then(ok, falha);
-        return fetch('/__sb', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(q)})
+        return fetch((window.IndyCarApps ? window.IndyCarApps.rota('/__sb') : '/__sb'), {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(q)})
           .then(r => r.json()).catch(() => ({data: null, error: {message: 'Failed to fetch'}})).then(ok, falha);
       },
     };
@@ -102,7 +102,7 @@
   let fonte = null; const canais = new Set();
   function ligarFonte() {
     if (fonte) return;
-    fonte = new EventSource('/__sb/eventos');
+    fonte = new EventSource(window.IndyCarApps ? window.IndyCarApps.rota('/__sb/eventos') : '/__sb/eventos');
     fonte.onmessage = m => {
       let e; try { e = JSON.parse(m.data); } catch { return; }
       for (const c of canais) for (const o of c.ouvintes) {

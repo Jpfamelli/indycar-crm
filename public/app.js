@@ -62,6 +62,8 @@ function servidorRespondeu() {
   document.dispatchEvent(new CustomEvent('indycar:voltou'));
 }
 const api = async (url, opts, renovou = false, cfg = {}) => {
+  // rodada 5: caminho relativo à pasta do app (na Central o CRM mora em /crm/)
+  url = IndyCarApps.rota(url);
   const metodo = String(opts?.method || 'GET').toUpperCase();
   const esperas = R4.esperasAcordar().slice(0, cfg.tentativas ?? 10);
   // a chave acompanha todas as tentativas desta mesma escrita
@@ -141,7 +143,7 @@ const TITULOS = {
   integracoes:   ['Integrações', 'Meta Ads, Google Ads e o ROI de cada canal'],
   ia:            ['IA', 'Pergunte ao CRM, triagem e o resumo da semana'],
   equipe:        ['Equipe e metas', 'Metas do mês, ranking e funil de cada vendedor'],
-  distribuir:    ['Distribuir leads', 'Divida os leads sem responsável entre a equipe, com prévia e desfazer'],
+  distribuir:    ['Leads sem dono', 'Quem está sem responsável, o rodízio sugerido e a distribuição manual, com prévia e desfazer'],
   relatorios:    ['Relatórios', 'Funil, conversão, tempo de resposta e perdas do período, com exportação'],
   configuracoes: ['Configurações', 'Sua conta, sua senha e a equipe'],
 };
@@ -414,6 +416,7 @@ $('#leadForm').addEventListener('submit', async e => {
     servico: $('#fServico').value, origem: $('#fOrigemForm').value,
     valor_orcado: $('#fOrcado').value || 0, valor_pago: $('#fPago').value || 0,
     status: $('#fStatusForm').value, utm_campaign: $('#fCampanha').value.trim(),
+    utm_source: $('#fUtmSource').value.trim(), utm_medium: $('#fUtmMedium').value.trim(),
     observacoes: $('#fObs').value.trim(),
   };
   const btnSalvar = $('#leadForm button[type="submit"]');
@@ -1194,7 +1197,7 @@ function mostrarFormPrimeiro(mostrar) { telaAcesso(mostrar ? 'formPrimeiro' : 'f
 
 async function verPrimeiroAcesso() {
   try {
-    const j = await (await fetch('/api/primeiro-acesso')).json();
+    const j = await (await fetch(IndyCarApps.rota('/api/primeiro-acesso'))).json();
     $('#btnCriarConta').hidden = !j.aberto;
     if (j.aberto) mostrarFormPrimeiro(true);
   } catch { /* servidor fora do ar: a tela de login normal já avisa */ }
@@ -1221,7 +1224,7 @@ $('#formPrimeiro').addEventListener('submit', async e => {
   btn.disabled = true; btn.textContent = 'CRIANDO…';
   try {
     // sem token ainda: esta é a única rota do CRM que roda sem login
-    const r = await fetch('/api/primeiro-acesso', {
+    const r = await fetch(IndyCarApps.rota('/api/primeiro-acesso'), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ nome, email, senha }),
     });

@@ -44,9 +44,14 @@ const SEG = require('./lib/seguranca');
 const U = require('./lib/util-servidor');
 const R4 = require('./lib/rodada4');
 const PATIO = require('./lib/patio-crm');
+const R5 = require('./lib/rodada5');
+const APPS = require('./lib/apps');
 const ESTATICOS = R4.criarEstaticos({ fs });
 const IDEM = R4.criarIdempotencia();
-const VERSAO = (() => { try { return require('./package.json').version + '-r4'; } catch { return 'r4'; } })();
+const VERSAO = (() => { try { return require('./package.json').version + '-r5'; } catch { return 'r5'; } })();
+/* Rodada 5: o CRM pode ser montado num prefixo (Central: /crm/). A Central tira o
+   prefixo do req.url e põe em req.prefixo; a variável PREFIXO cobre o caso solto. */
+const PREFIXO = APPS.normalizarPrefixo(process.env.PREFIXO);
 
 const PORT = process.env.PORT || 3100;
 const PUBLIC = path.join(__dirname, 'public');
@@ -337,13 +342,19 @@ function filtrarClientes(fichas, q) {
   });
 }
 
-const server = http.createServer(async (req, res) => {
+/* O handler é exportado (rodada 5): a Central monta vários apps num servidor só.
+   `listen` fica em iniciar(), chamado só quando este arquivo é o programa principal. */
+async function handler(req, res) {
   try {
     // dentro do try: um Host malformado faria o parser de URL lançar
     let url;
     try { url = new URL(req.url, `http://${req.headers.host || 'localhost'}`); }
     catch { return json(res, 400, { erro: 'requisição malformada' }); }
-    const { pathname } = url;
+    let { pathname } = url;
+    // prefixo: vem da Central (req.prefixo) ou da variável; se ainda estiver na URL, sai daqui
+    const prefixo = APPS.normalizarPrefixo(req.prefixo !== undefined ? req.prefixo : PREFIXO);
+    if (prefixo && (pathname === prefixo || pathname.startsWith(prefixo + '/'))) pathname = pathname.slice(prefixo.length) || '/';
+    if (prefixo && pathname === '/' && !req.url.split('?')[0].endsWith('/')) { res.writeHead(308, { Location: prefixo + '/' + (url.search || '') }); res.end(); return; }
     res._req = req;
     SEG.aplicarCabecalhos(res, { https: NA_NUVEM });
 
@@ -361,7 +372,7 @@ const server = http.createServer(async (req, res) => {
       /* Rodada 4: ping sem login e barato. A tela chama para acordar o Render
          enquanto a pessoa digita a senha e para saber quando o servidor voltou. */
       if (pathname === '/api/ping' && (req.method === 'GET' || req.method === 'HEAD')) {
-        return json(res, 200, { ok: true, versao: VERSAO, hora: new Date().toISOString(), noArDesde: NO_AR_DESDE });
+        return json(res, 200, { ok: true, versao: VERSAO, hora: new Date().toISOString(), noArDesde: NO_AR_DESDE, prefixo: prefixo || '' });
       }
 
       if (pathname === '/api/config' && req.method === 'GET') {
@@ -486,8 +497,12 @@ const server = http.createServer(async (req, res) => {
       const limparTudo = () => { statsCache = null; CLIENTES_CACHE = null; store.esquecerCache?.(); };
       if (req.method !== 'GET') { CLIENTES_CACHE = null; }
 
+      /* Rodada 5: ficha 360 (rpc), busca global, leads sem dono, campanha do Comunicar, filtros salvos, previsão. */
+      if (await R5.rotasR5({ req, res, url, pathname, quem, json, lerCorpo: () => readBody(req), freio: FREIO, auditar, prefixo, acesso: acesso(),
+        equipe: equipe(), store, baseClientes: USA_SUPABASE ? carregarBaseClientes : null, sb: USA_SUPABASE ? adminSupabase() : null })) return;
+
       /* Rodada 4: valor pago (sem valor + lote) e distribuição em lote. */
-      if (await R4.rotasR4({ req, res, url, pathname, quem, json, lerCorpo: () => readBody(req), freio: FREIO, auditar,
+      if (await R4.rotasR4({ req, res, url, pathname, quem, json, lerCorpo: () => readBody(req), freio: FREIO, auditar, prefixo,
         equipe: equipe(), sb: USA_SUPABASE ? adminSupabase() : null, limparStats: limparTudo })) return;
 
       /* Rodada 3: eu, vendedores, responsável, rodízio, desempenho, metas,
@@ -636,7 +651,10 @@ const server = http.createServer(async (req, res) => {
           if (!updated) return json(res, 404, { erro: 'lead não encontrado' });
           // auditoria: fechamento (concluído/perdido), reabertura e mudança de valores
           if (updated.status !== antes.status && ['concluido', 'perdido'].includes(updated.status)) {
-            await auditar(quem, 'lead_fechado', { tabela: 'leads', registro: id, detalhes: { de: antes.status, para: updated.status, valor_pago: Number(updated.valor_pago) || 0 } });
+            // rodada 5: o motivo da perda (padronizado) vai para a auditoria — o gestor vê quem fechou e por quê
+            const motivo = updated.status === 'perdido' ? R5.motivoDe(updated.observacoes) : null;
+            await auditar(quem, 'lead_fechado', { tabela: 'leads', registro: id, detalhes: { de: antes.status, para: updated.status, valor_pago: Number(updated.valor_pago) || 0,
+              ...(updated.status === 'perdido' ? { motivo, motivo_padrao: R5.motivoPadrao(motivo) } : {}) } });
           } else if (updated.status !== antes.status && ['concluido', 'perdido'].includes(antes.status)) {
             await auditar(quem, 'lead_reaberto', { tabela: 'leads', registro: id, detalhes: { de: antes.status, para: updated.status } });
           }
@@ -674,10 +692,13 @@ const server = http.createServer(async (req, res) => {
         try {
           const cfg = await ia.config();
           const dados = await ia.dadosResumo(periodo);
+          // rodada 5: previsão de faturamento pelo funil entra no briefing e volta para a tela
+          try { dados.previsao = R5.previsaoPipeline(await store.todosOsLeads()); } catch { dados.previsao = null; }
           if (!cfg.ativo) return json(res, 503, { ok: false, erro: 'A IA está desligada nas configurações.', briefing: montarBriefing({ ...dados, periodo }) });
           const u = await ia.uso();
           if (u.restante <= 0) return json(res, 429, { ok: false, erro: 'Limite diário da IA atingido.' });
           const resultado = await gerarResumoSemanal(dados, { periodo, modelo: cfg.modelo_forte, clienteIA: ia.obterIA() });
+          resultado.previsao = dados.previsao;
           await ia.registrar({ tipo: 'crm_resumo', status: resultado.ok ? 'executada' : 'erro', perfil_id: quem.id,
             executada_em: resultado.ok ? new Date().toISOString() : null, modelo: resultado.modelo || cfg.modelo_forte,
             tokens_entrada: resultado.tokens?.entrada || 0, tokens_saida: resultado.tokens?.saida || 0, duracao_ms: resultado.duracaoMs || null,
@@ -1106,7 +1127,7 @@ const server = http.createServer(async (req, res) => {
     if (res.headersSent) { try { res.end(); } catch { /* conexão já foi */ } return; }
     json(res, st, { erro: err && err.status ? err.message : 'Não foi possível concluir. Tente novamente.', ...(err && err.codigo ? { codigo: err.codigo } : {}), ...(err && err.precisaConfirmar ? { precisaConfirmar: true } : {}) });
   }
-});
+}
 
 /* Onde escutar:
    - Na nuvem (Render), TEM de ser 0.0.0.0 — o roteador do Render fala com o
@@ -1121,19 +1142,32 @@ const HOST = process.env.CRM_HOST || (NA_NUVEM ? '0.0.0.0' : '127.0.0.1');
 
 /* Automações no próprio servidor: primeira volta 1 min depois de subir, depois
    a cada CRM_AUTOMACOES_MIN (padrão 15). Desligue com CRM_AUTOMACOES=0. Em
-   produção gratuita o Render dorme: use também o agendador (rota protegida). */
-if (AUTOMACOES_LIGADAS && USA_SUPABASE && typeof setInterval === 'function') {
+   produção gratuita o Render dorme: use também o agendador (rota protegida).
+   Rodada 5: só liga quando o servidor sobe de verdade (iniciar), não ao importar. */
+function ligarAutomacoes() {
+  if (!(AUTOMACOES_LIGADAS && USA_SUPABASE && typeof setInterval === 'function')) return;
   const volta = () => { const a = automacoes(); if (a) a.ciclo({ origem: 'timer' }).catch(e => console.warn('[automações]', e && e.message)); };
   const t1 = setTimeout(volta, 60_000); if (t1.unref) t1.unref();
   const t2 = setInterval(volta, INTERVALO_MIN * 60_000); if (t2.unref) t2.unref();
 }
 
-server.headersTimeout = 66_000;
-/* keep-alive maior que o do proxy do Render (evita 502 por conexão reaproveitada que o Node já fechou) */
-server.keepAliveTimeout = 65_000;
-server.requestTimeout = 30_000;
-server.listen(PORT, HOST, () => {
-  console.log(`\n🏁 IndyCar CRM rodando em http://localhost:${PORT}`);
+/** Sobe o servidor HTTP sozinho (modo solto). A Central importa só o `handler`. */
+function iniciar({ porta = PORT, host = HOST } = {}) {
+  const server = http.createServer(handler);
+  server.headersTimeout = 66_000;
+  /* keep-alive maior que o do proxy do Render (evita 502 por conexão reaproveitada que o Node já fechou) */
+  server.keepAliveTimeout = 65_000;
+  server.requestTimeout = 30_000;
+  ligarAutomacoes();
+  server.listen(porta, host, () => avisarNoAr(porta));
+  return server;
+}
+
+module.exports = { handler, iniciar, PREFIXO, VERSAO };
+if (require.main === module) iniciar();
+
+function avisarNoAr(porta) {
+  console.log(`\n🏁 IndyCar CRM rodando em http://localhost:${porta}${PREFIXO ? PREFIXO + '/' : ''}`);
   if (USA_SUPABASE) {
     console.log('   🗄️  Banco: SUPABASE (compartilhado com a Agenda)');
   } else {
@@ -1156,4 +1190,4 @@ server.listen(PORT, HOST, () => {
      que recado nenhum: sugere um buraco que não existe e desvia a atenção. */
   if (HOST === '127.0.0.1') console.log('   (acessível só neste computador)\n');
   else console.log(`   🔒 exposto em ${HOST} — acesso só com login\n`);
-});
+}

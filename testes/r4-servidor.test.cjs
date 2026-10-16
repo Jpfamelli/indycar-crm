@@ -16,7 +16,7 @@ test('ping sem login, compressão do JSON e ETag dos estáticos', async () => {
   const s = await subirServidor({ tabelas: { leads: leads(40) } });
   try {
     const p = await s.req(null, '/api/ping');
-    assert.equal(p.status, 200); assert.equal(p.corpo.ok, true); assert.match(p.corpo.versao, /r4/);
+    assert.equal(p.status, 200); assert.equal(p.corpo.ok, true); assert.match(p.corpo.versao, /r[45]/);
     const r = await fetch(s.url + '/api/leads', { headers: { Authorization: `Bearer tok-${PESSOAS.gestor.id}-z`, 'Accept-Encoding': 'gzip' } });
     assert.equal(r.status, 200); assert.equal(r.headers.get('content-encoding'), 'gzip');
     assert.equal((await r.json()).length, 40);

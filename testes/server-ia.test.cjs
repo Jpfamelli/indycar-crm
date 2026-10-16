@@ -46,9 +46,10 @@ async function subir({ roteiros = [], papel = 'admin', usuario = 'u-teste' } = {
     async weeklyData() { return { stats: { semana: { porOrigem: [], porStatus: {}, total: 0, ganhos: 0, perdidos: 0, faturamento: 0, emAberto: 0, ticket: 0, conversao: 0 }, comparativo: { leads: { anterior: 0 }, faturamento: { anterior: 0 } } }, semanaLeads: [] }; },
   };
   const libIA = require('../lib/ia-crm');
-  let servidor;
+  const modulo = { exports: {} };
   const sandbox = {
-    require: n => n === 'node:http' ? { createServer: fn => (servidor = http.createServer(fn)) }
+    module: modulo, exports: modulo.exports,
+    require: n => n === 'node:http' ? http
       : n === './db-supabase' ? store
       : n === '@supabase/supabase-js' ? { createClient: () => sb }
       : n === './lib/ia-crm' ? { ...libIA, criarIACrm: o => libIA.criarIACrm({ ...o, clienteIA: ia }) }
@@ -58,6 +59,7 @@ async function subir({ roteiros = [], papel = 'admin', usuario = 'u-teste' } = {
     fetch: async url => ({ ok: true, json: async () => url.includes('/user') ? { id: login.id } : [{ ativo: true, papel: login.papel }] }),
   };
   vm.runInNewContext(fs.readFileSync(path.join(RAIZ, 'server.js'), 'utf8'), sandbox);
+  const servidor = http.createServer(modulo.exports.handler).listen(0, '127.0.0.1');
   await new Promise(r => servidor.once('listening', r));
   const base = `http://127.0.0.1:${servidor.address().port}`;
   let n = 0;

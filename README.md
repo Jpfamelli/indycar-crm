@@ -62,3 +62,13 @@ Código: `lib/acesso.js`, `lib/equipe-crm.js`, `lib/tarefas.js`, `lib/automacoes
 **IA.** Avaliada com 10 leads reais em modo "sugerir" (nada gravado). Ajustes: tempo em dias, "IndyCar" padronizado, oi simples quando o nome não é de pessoa, mensagens curtas, etapa desatualizada como sinal.
 
 Testes: `testes/r4-servidor.test.cjs`, `testes/r4-utils.test.cjs`, `testes/r4-ia.test.cjs`. Mock: `MOCK_LEADS=700`, `MOCK_DORMINDO=40`, `POST /__mock/dormir {segundos}`, `?tour=1`. Código: `lib/rodada4.js`, `public/crm-r4.js` (funções puras), `public/rodada4.js` (tela).
+
+## Rodada 5 — ficha 360, busca global, leads sem dono, campanha e Central (16/10/2026)
+
+**Central.** `server.js` exporta `{ handler, iniciar, PREFIXO, VERSAO }`; só escuta quando é o programa principal. Montado num prefixo (`req.prefixo` vindo da Central ou variável `PREFIXO=/crm`), o handler tira o prefixo, redireciona `/crm` → `/crm/` e monta os links com ele. A tela usa só caminhos relativos (`public/apps.js`: `IndyCarApps.rota('/api/…')`, `urlApp('agenda', '/?tel=…')`); manifest e service worker são relativos ao escopo. Ensaio local: `MOCK_PREFIXO=/crm npm run mock` → http://127.0.0.1:3101/crm/.
+
+**Rotas novas** (login): `GET /api/clientes/360?tel=|cliente=` (rpc `cliente_360` + links cruzados), `GET /api/busca?q=`, `GET /api/leads/sem-dono` (gestor; resumo + rodízio sugerido, nada gravado — aplicar é `POST /api/leads/distribuir`), `POST /api/leads/campanha {ids, corpo, enviar_em?, detalhe?}` (cria proposta em `comunicar_campanhas`; o gestor aprova no Comunicar), `GET/PUT /api/filtros` (em `perfis.preferencias.crm_filtros`), `GET /api/previsao[?meus=1]`, `GET /api/motivos-perda`. `/api/lead-por-telefone` usa `telefone_e164`.
+
+**Tela.** Ctrl+K (leads, clientes e telas), filtros salvos, ficha 360 em uma chamada, "Leads sem dono" com rodízio sugerido e desfazer, "Campanha no Comunicar" na barra de lote, card "Previsão pelo funil" (também no resumo da IA, com "O que fazer esta semana"), fonte/mídia (utm) no lead, M/↑↓/X no teclado, CSV auditado. Modelos: Sonnet com `thinking between_tools`, Opus/Haiku com `effort low` (`lib/rodada5.js parametrosModelo`).
+
+Testes: `testes/r5-utils.test.cjs`, `testes/r5-servidor.test.cjs` (inclui o servidor montado em `/crm/`), roteiro `node testes/r5-navegador.mjs` (Chrome, 1440/375, solto e em /crm/).

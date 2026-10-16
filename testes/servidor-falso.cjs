@@ -36,7 +36,8 @@ function carregarDb(sb, env) {
   return mod.exports;
 }
 
-async function subirServidor({ tabelas = {}, roteiros = [], env = {}, comPessoas = true } = {}) {
+const opcoesPrefixo = o => { const p = String((o && o.prefixo) || '').trim().replace(/^\/+|\/+$/g, ''); return p ? '/' + p : ''; };
+async function subirServidor({ tabelas = {}, roteiros = [], env = {}, comPessoas = true, prefixo = '' } = {}) {
   const base = { perfis: comPessoas ? Object.values(PESSOAS).map(p => ({ ...p })) : [], leads: [], clientes: [], conversas: [], whatsapp_mensagens: [],
     tarefas: [], metas: [], notificacoes: [], auditoria: [], ia_acoes: [], agendamentos: [], vigia_estado: [],
     ia_config: [{ id: true, ativo: true, modelo_rapido: 'modelo-rapido-teste', modelo_forte: 'modelo-forte-teste', autonomia: 'confirmar', limite_chamadas_dia: 500 }],
@@ -47,14 +48,19 @@ async function subirServidor({ tabelas = {}, roteiros = [], env = {}, comPessoas
   const store = carregarDb(sb, procEnv);
   const libIA = require('../lib/ia-crm');
   const auth = { chamadas: 0, fora: false };
-  let servidor;
-  const sandbox = {
-    require: n => n === 'node:http' ? { createServer: fn => (servidor = http.createServer(fn)) }
+  /* Rodada 5: o server.js exporta { handler, iniciar } e só escuta quando é o programa
+     principal. Aqui `require.main` fica indefinido: nada escuta sozinho; o teste monta o
+     servidor em cima do handler (e pode montá-lo num prefixo, como a Central). */
+  const modulo = { exports: {} };
+  const requerer = n => n === 'node:http' ? http
       : n === './db-supabase' ? store
       : n === '@supabase/supabase-js' ? { createClient: () => sb }
       : n === './lib/ia-crm' ? { ...libIA, criarIACrm: o => libIA.criarIACrm({ ...o, clienteIA: ia }) }
-      : n.startsWith('./') ? require(path.join(RAIZ, n)) : require(n),
-    __dirname: RAIZ, Buffer, URL, AbortSignal, console: { log() {}, warn() {}, error() {} },
+      : n.startsWith('./') ? require(path.join(RAIZ, n)) : require(n);
+  requerer.main = undefined;
+  const sandbox = {
+    require: requerer, module: modulo, exports: modulo.exports,
+    __dirname: RAIZ, Buffer, URL, AbortSignal, setTimeout, setInterval, clearTimeout, clearInterval, console: { log() {}, warn() {}, error() {} },
     process: { env: procEnv, loadEnvFile() {}, pid: 1 },
     fetch: async (url, opts = {}) => {
       auth.chamadas++;
@@ -66,8 +72,20 @@ async function subirServidor({ tabelas = {}, roteiros = [], env = {}, comPessoas
     },
   };
   vm.runInNewContext(fs.readFileSync(path.join(RAIZ, 'server.js'), 'utf8'), sandbox);
+  const { handler } = modulo.exports;
+  if (typeof handler !== 'function') throw new Error('server.js precisa exportar { handler }');
+  /* prefixo (ex.: '/crm'): proxy mínimo como a Central — tira o prefixo do req.url e põe em req.prefixo */
+  const pre = opcoesPrefixo({ prefixo });
+  const servidor = http.createServer((req, res) => {
+    if (!pre) return handler(req, res);
+    if (req.url === pre || req.url.startsWith(pre + '/') || req.url.startsWith(pre + '?')) {
+      req.url = req.url.slice(pre.length) || '/'; req.prefixo = pre; return handler(req, res);
+    }
+    res.writeHead(404, { 'Content-Type': 'text/plain' }); res.end('fora do prefixo');
+  });
+  servidor.listen(0, '127.0.0.1');
   await new Promise(r => servidor.once('listening', r));
-  const url = `http://127.0.0.1:${servidor.address().port}`;
+  const url = `http://127.0.0.1:${servidor.address().port}` + pre;
   let n = 0;
   /** Pedido como `quem` (chave de PESSOAS, um id, ou null = sem login). */
   async function req(quem, p, opts = {}) {

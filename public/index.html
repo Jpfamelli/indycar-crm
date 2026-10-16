@@ -29,9 +29,9 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%230a0a0a'/><text y='.85em' x='8' font-size='78' font-family='sans-serif' font-weight='bold' fill='%23e50914'>I</text></svg>" />
   <!-- Instalável: com isto o Chrome/Edge oferece "Instalar CRM" e o app
        abre em janela própria, sem barra de endereço. -->
-  <link rel="manifest" href="/manifest.json" />
-  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
-  <link rel="apple-touch-icon" href="/icon-192.png" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="CRM" />
@@ -81,7 +81,7 @@
     </button>
     <button class="nav-item" data-view="distribuir" hidden>
       <svg viewBox="0 0 24 24"><path d="M12 2l4 4h-3v5h5V8l4 4-4 4v-3h-5v5h3l-4 4-4-4h3v-5H6v3l-4-4 4-4v3h5V6H8l4-4z" fill="currentColor"/></svg>
-      <span>Distribuir</span>
+      <span>Leads sem dono</span>
     </button>
     <button class="nav-item" data-view="relatorios" hidden>
       <svg viewBox="0 0 24 24"><path d="M5 3h10l4 4v14H5V3zm9 1.5V8h3.5L14 4.5zM8 17h2v-5H8v5zm3 0h2V10h-2v7zm3 0h2v-3h-2v3z" fill="currentColor"/></svg>
@@ -105,7 +105,7 @@
     </button>
   </nav>
 
-  <label class="ecossistema">Ecossistema IndyCar<select id="ecossistema" aria-label="Abrir outro sistema"><option value="">CRM · atual</option><option value="https://indycar-agendamentos.onrender.com">Agenda</option><option value="https://indycar-atendimento.onrender.com">Atendimento</option><option value="https://indycar-posvenda.onrender.com">Comunicar</option><option value="https://indycar-orcador.netlify.app">Orçador</option><option value="https://indycar-taubate.netlify.app">Site</option></select></label>
+  <label class="ecossistema">Ecossistema IndyCar<select id="ecossistema" aria-label="Abrir outro sistema"><option value="">CRM · atual</option></select></label>
   <div class="side-foot">
     <button class="tema-toggle" id="btnTema" type="button"
             title="Alternar tema claro e escuro" aria-label="Alternar tema claro e escuro">
@@ -128,8 +128,9 @@
     <div class="topbar-actions">
       <div class="search">
         <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 10-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1114 9.5 4.5 4.5 0 019.5 14z" fill="currentColor"/></svg>
-        <input aria-label="Buscar leads" id="search" type="search" placeholder="Buscar nome, telefone, placa, carro…" />
+        <input aria-label="Buscar leads" id="search" type="search" placeholder="Filtrar leads (Ctrl+K busca tudo)…" />
       </div>
+      <button type="button" class="btn btn-ghost sm busca-global-btn" id="btnBuscaGlobal" aria-label="Busca global: nome, telefone ou placa (Ctrl+K)" title="Busca global (Ctrl+K)"><span aria-hidden="true">⌕</span><span class="bg-txt">Buscar tudo</span><kbd>Ctrl K</kbd></button>
       <button type="button" class="fila-chip" id="filaChip" hidden aria-live="polite"></button>
       <button class="btn btn-primary" id="btnNovo">+ Novo Lead</button>
       <div class="topo-icones">
@@ -193,6 +194,10 @@
       <div class="sv-acoes"><button type="button" class="btn btn-ghost sm" id="svVer">Ver na lista</button><button type="button" class="btn btn-primary sm" id="svPreencher" hidden>Preencher agora</button></div>
     </div>
     <div class="kpis" id="kpis"></div>
+    <div class="card card-previsao" id="cardPrevisao" hidden>
+      <div class="card-topo"><h3>Previsão pelo funil</h3><span class="filter-count" id="pvTxt"></span></div>
+      <div id="previsaoFunil" aria-live="polite"></div>
+    </div>
     <div class="grid-2">
       <div class="card">
         <div class="card-topo"><h3>Metas do mês</h3><button type="button" class="btn btn-ghost sm" id="btnMetas" hidden>Definir metas</button></div>
@@ -256,7 +261,8 @@
       <label>Ordenar <select id="ordemLeads"><option value="recente">Mais recentes</option><option value="nome">Nome A–Z</option><option value="valor">Maior valor</option><option value="antigo">Mais antigos</option><option value="parado">Mais tempo parado</option></select></label>
       <label class="chk-pill"><input type="checkbox" id="soParados" /> Só parados</label>
       <label class="chk-pill"><input type="checkbox" id="soSemValor" /> Concluídos sem valor</label>
-      <button class="btn btn-ghost sm" id="limparFiltros" type="button">Limpar filtros</button><button class="btn btn-ghost sm" id="exportarLeads" type="button">Exportar CSV</button>
+      <label class="filtros-salvos">Filtros salvos <select id="filtrosSalvos" aria-label="Aplicar um filtro salvo"><option value="">—</option></select></label><button class="btn btn-ghost sm" id="btnSalvarFiltro" type="button" title="Guardar os filtros de agora com um nome">Salvar filtro</button>
+      <button class="btn btn-ghost sm" id="limparFiltros" type="button">Limpar filtros</button><button class="btn btn-ghost sm" id="exportarLeads" type="button" title="Exporta só o que está filtrado">Exportar CSV</button>
       <div class="colunas-menu">
         <button class="btn btn-ghost sm" id="btnColunas" type="button" aria-expanded="false" aria-controls="painelColunas">Colunas</button>
         <div id="painelColunas" class="pop" role="group" aria-label="Colunas visíveis" hidden></div>
@@ -268,6 +274,7 @@
       <select id="loteStatus" aria-label="Mudar etapa dos selecionados"><option value="">Mudar etapa…</option></select>
       <select id="loteOrigem" aria-label="Atribuir origem aos selecionados"><option value="">Atribuir origem…</option></select>
       <select id="loteResp" aria-label="Passar os selecionados para"><option value="">Passar para…</option></select>
+      <button class="btn btn-ghost sm" id="loteCampanha" type="button" title="Monta uma campanha no Comunicar com os selecionados; o gestor aprova lá">✉️ Campanha no Comunicar</button>
       <button class="btn btn-ghost sm" id="loteExportar" type="button">Exportar seleção</button>
       <button class="btn btn-ghost sm" id="loteLimpar" type="button">Limpar seleção</button>
       <small class="lote-nota" id="loteNota" hidden>Passar em lote e distribuir é do gestor.</small>
@@ -357,6 +364,13 @@
 
   <!-- ---------- DISTRIBUIR (gestor) — rodada 4 ---------- -->
   <section class="view" id="view-distribuir">
+    <div class="card card-sem-dono" id="cardSemDono">
+      <div class="card-topo"><h3 id="sdTitulo">Leads sem dono</h3><span class="filter-count" id="sdTxt" aria-live="polite"></span></div>
+      <div class="sd-resumo" id="sdResumo"></div>
+      <div class="sd-rodizio" id="sdRodizio"></div>
+      <div class="int-actions"><button type="button" class="btn btn-ghost sm" id="sdRecarregar">Recalcular</button><div class="spacer"></div><button type="button" class="btn btn-primary" id="sdAplicar" disabled>Aplicar o rodízio sugerido</button></div>
+      <p class="muted mini-nota">Nada muda sozinho: a sugestão só vale quando o gestor clicar em aplicar. Fica na auditoria e dá para desfazer. Abaixo, a distribuição manual com filtros.</p>
+    </div>
     <div class="dist-grade">
       <div class="card">
         <div class="card-topo"><h3>1. Quais leads</h3><span class="filter-count" id="dsQtd" aria-live="polite"></span></div>
@@ -777,6 +791,10 @@
         <label>Status<select id="fStatusForm"></select></label>
         <label>Campanha (UTM)<input id="fCampanha" maxlength="200" placeholder="ex: trafego-cambio" /></label>
       </div>
+      <div class="row">
+        <label>Fonte (utm_source)<input id="fUtmSource" maxlength="200" placeholder="ex: instagram, site, area_cliente" /></label>
+        <label>Mídia (utm_medium)<input id="fUtmMedium" maxlength="200" placeholder="ex: cpc, story, indicacao" /></label>
+      </div>
       <label>Observações<textarea id="fObs" maxlength="4000" rows="3" placeholder="Detalhes do atendimento…"></textarea></label>
       <div class="modal-actions">
         <button type="button" class="btn btn-ghost" id="btnExcluir">Excluir</button>
@@ -854,9 +872,39 @@
   </div>
 </div>
 
+<!-- Rodada 5: busca global (Ctrl+K) -->
+<dialog class="dlg dlg-busca" id="dlgBusca" aria-labelledby="dlgBuscaT">
+  <h3 id="dlgBuscaT" class="sr">Busca global</h3>
+  <div class="bg-campo"><span aria-hidden="true">⌕</span><input id="buscaGlobal" type="text" inputmode="search" enterkeyhint="go" autocomplete="off" placeholder="Nome, telefone ou placa…" aria-label="Buscar em leads e clientes" aria-controls="buscaResultados" aria-expanded="true" role="combobox" /><kbd>Esc</kbd></div>
+  <div id="buscaResultados" class="bg-resultados" role="listbox" aria-label="Resultados"><p class="vazio-curto">Digite 2 letras do nome, 4 números do telefone ou a placa. <kbd>↑</kbd> <kbd>↓</kbd> escolhem, <kbd>Enter</kbd> abre.</p></div>
+</dialog>
+
+<dialog class="dlg" id="dlgFiltro" aria-labelledby="dlgFiltroT">
+  <form method="dialog" id="formFiltro">
+    <h3 id="dlgFiltroT">Salvar este filtro</h3>
+    <p class="muted" id="dlgFiltroResumo"></p>
+    <label>Nome do filtro<input id="filtroNome" maxlength="40" required placeholder="ex.: Orçamentos parados do Google" /></label>
+    <p class="form-erro" id="filtroErro" role="alert"></p>
+    <div class="modal-actions"><button type="button" class="btn btn-ghost" data-fechar>Cancelar</button><div class="spacer"></div><button type="submit" class="btn btn-primary">Salvar</button></div>
+  </form>
+</dialog>
+
+<dialog class="dlg dlg-largo" id="dlgCampanha" aria-labelledby="dlgCampanhaT">
+  <form method="dialog" id="formCampanha">
+    <h3 id="dlgCampanhaT">Campanha no Comunicar</h3>
+    <p class="muted" id="campTxt"></p>
+    <label>Mensagem<textarea id="campCorpo" maxlength="2000" rows="4" required placeholder="Oi {nome}! Aqui é da IndyCar. …"></textarea><small>Use {nome}, {carro} e {placa}. Sem preço e sem "prezado/efetuar/comparecer/veículo".</small></label>
+    <div class="row"><label>Enviar a partir de<input id="campQuando" type="datetime-local" /></label><label>Detalhe interno<input id="campDetalhe" maxlength="200" placeholder="ex.: reativação de orçamentos de setembro" /></label></div>
+    <p class="muted mini-nota">A campanha nasce como proposta: o gestor aprova no Comunicar antes de sair. Quem pediu para não receber mensagens fica de fora lá.</p>
+    <p class="form-erro" id="campErro" role="alert"></p>
+    <div class="modal-actions"><button type="button" class="btn btn-ghost" data-fechar>Cancelar</button><div class="spacer"></div><button type="submit" class="btn btn-primary" id="campEnviar">Mandar para o Comunicar</button></div>
+  </form>
+</dialog>
+
 <dialog class="dlg" id="dlgAtalhos" aria-labelledby="dlgAtalhosT">
   <h3 id="dlgAtalhosT">Atalhos de teclado</h3>
   <dl class="atalhos">
+    <dt><kbd>Ctrl</kbd> <kbd>K</kbd></dt><dd>Busca global: nome, telefone ou placa (leads e clientes)</dd>
     <dt><kbd>N</kbd></dt><dd>Novo lead</dd>
     <dt><kbd>/</kbd></dt><dd>Buscar leads</dd>
     <dt><kbd>G</kbd> <kbd>D</kbd></dt><dd>Dashboard</dd>
@@ -865,10 +913,13 @@
     <dt><kbd>G</kbd> <kbd>C</kbd></dt><dd>Clientes</dd>
     <dt><kbd>G</kbd> <kbd>I</kbd></dt><dd>IA</dd>
     <dt><kbd>G</kbd> <kbd>E</kbd></dt><dd>Equipe e metas (gestor)</dd>
-    <dt><kbd>G</kbd> <kbd>B</kbd></dt><dd>Distribuir leads (gestor)</dd>
+    <dt><kbd>G</kbd> <kbd>B</kbd></dt><dd>Leads sem dono (gestor)</dd>
     <dt><kbd>G</kbd> <kbd>R</kbd></dt><dd>Relatórios (gestor)</dd>
     <dt><kbd>G</kbd> <kbd>T</kbd></dt><dd>Minhas tarefas</dd>
     <dt><kbd>Shift</kbd> <kbd>←</kbd> <kbd>→</kbd></dt><dd>Mover o cartão do funil de etapa</dd>
+    <dt><kbd>M</kbd></dt><dd>No cartão do funil: abrir a lista de etapas para mover</dd>
+    <dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Na lista de leads: andar pelas linhas</dd>
+    <dt><kbd>X</kbd></dt><dd>Na lista de leads: marcar/desmarcar a linha em foco</dd>
     <dt><kbd>Enter</kbd></dt><dd>Abrir o lead em foco</dd>
     <dt><kbd>Esc</kbd></dt><dd>Fechar janela</dd>
     <dt><kbd>?</kbd></dt><dd>Ajuda</dd>
@@ -975,6 +1026,7 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.0/dist/umd/supabase.min.js"></script>
+<script src="apps.js"></script>
 <script src="crm-utils.js"></script>
 <script src="crm-r4.js"></script>
 <script src="app.js"></script>
@@ -983,11 +1035,12 @@
 <script src="equipe.js"></script>
 <script src="rodada4.js"></script>
 <script src="crm-ia.js"></script>
+<script src="rodada5.js"></script>
 <script>
   /* Registra o service worker — é o que torna o app instalável.
      Falha silenciosa de propósito: sem ele o app funciona igual, só deixa
      de aparecer o botão de instalar. */
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
 </body>
 </html>

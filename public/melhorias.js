@@ -27,7 +27,7 @@ $('#soParados').addEventListener('change', () => refiltrarTela());
 $('#soSemValor').addEventListener('change', () => refiltrarTela());
 $('#limparFiltros').addEventListener('click', () => { $('#fStatus').value = ''; $('#fOrigem').value = ''; $('#search').value = ''; $('#ordemLeads').value = 'recente'; $('#soParados').checked = false; $('#soSemValor').checked = false; refiltrarTela(); renderKanban(); });
 function baixarCsv(lista, nome) {
-  const rows = [['Nome','Telefone','Carro','Placa','Serviço','Origem','Status','Responsável','Orçado','Pago','Entrada','Dias na etapa','Campanha'], ...lista.map(l => [l.nome, l.telefone, l.carro_modelo, l.placa, l.servico, LABEL_ORIGEM[l.origem] || l.origem, LABEL_STATUS[l.status] || l.status, nomeResponsavel(l.responsavel_id), l.valor_orcado, l.valor_pago, l.created_at, U.diasNaEtapa(l), l.utm_campaign])];
+  const rows = [['Nome','Telefone','Carro','Placa','Serviço','Origem','Fonte (utm)','Mídia (utm)','Campanha','Status','Motivo da perda','Responsável','Orçado','Pago','Entrada','Dias na etapa'], ...lista.map(l => [l.nome, l.telefone, l.carro_modelo, l.placa, l.servico, LABEL_ORIGEM[l.origem] || l.origem, l.utm_source || '', l.utm_medium || '', l.utm_campaign, LABEL_STATUS[l.status] || l.status, l.status === 'perdido' ? (U.motivoPadrao(U.motivoPerda(l.observacoes)) || '') : '', nomeResponsavel(l.responsavel_id), l.valor_orcado, l.valor_pago, l.created_at, U.diasNaEtapa(l)])];
   const url = URL.createObjectURL(new Blob([U.csv(rows)], {type: 'text/csv;charset=utf-8'}));
   const a = document.createElement('a'); a.href = url; a.download = nome + '-' + new Date().toISOString().slice(0, 10) + '.csv'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   toast(`${lista.length} lead${lista.length === 1 ? '' : 's'} exportado${lista.length === 1 ? '' : 's'}`);
@@ -170,7 +170,7 @@ async function moverEtapa(id, novo, {anunciar} = {}) {
 /* ---------------- lista de leads: colunas, seleção, lote, páginas ---------------- */
 let PAG_LEADS = 1; const SEL = new Set();
 let COLUNAS = U.colunasValidas(lerLS('indycar_crm_colunas', null));
-const ROTULO_COLUNA = {cliente: 'Cliente', carro: 'Carro', servico: 'Serviço', origem: 'Origem', valor: 'Valor', status: 'Status', responsavel: 'Responsável', etapa: 'Na etapa', entrada: 'Entrada', campanha: 'Campanha'};
+const ROTULO_COLUNA = {cliente: 'Cliente', carro: 'Carro', servico: 'Serviço', origem: 'Origem', fonte: 'Fonte (utm)', valor: 'Valor', status: 'Status', responsavel: 'Responsável', etapa: 'Na etapa', entrada: 'Entrada', campanha: 'Campanha'};
 function celula(c, l, agora) {
   switch (c) {
     case 'cliente': return `<td><div class="cell-main">${esc(l.nome)}</div><div class="cell-sub">${esc(U.formatarTelefone(l.telefone))}</div></td>`;
@@ -182,6 +182,7 @@ function celula(c, l, agora) {
     case 'etapa': { const d = U.diasNaEtapa(l, agora), p = U.parado(l, agora); return `<td class="cell-sub${p ? ' parado-txt' : ''}">${p ? '<span class="sr">Parado: </span>⚠ ' : ''}${esc(U.textoDias(d))}</td>`; }
     case 'entrada': return `<td class="cell-sub">${dt(l.created_at)}</td>`;
     case 'campanha': return `<td class="cell-sub">${esc(l.utm_campaign) || '—'}</td>`;
+    case 'fonte': return `<td class="cell-sub">${esc([l.utm_source, l.utm_medium].filter(Boolean).join(' · ')) || '—'}</td>`;
     case 'responsavel': return `<td>${chipResponsavel(l.responsavel_id)}</td>`;
   }
   return '<td></td>';
@@ -471,7 +472,7 @@ function renderFichaLead(l) {
   $('#lfAcoes').innerHTML = botaoAcao(U.linkConversa(l.telefone), 'Abrir conversa', '💬') + botaoAcao(U.linkWhatsApp(l.telefone), 'WhatsApp', '🟢') +
     botaoAcao(U.linkLigar(l.telefone), 'Ligar', '📞') + botaoAcao(U.linkAgenda(l.telefone), 'Agendar', '📅') + botaoAcao(U.linkComunicar(l.telefone), 'Mandar mensagem', '✉️') +
     `<button type="button" class="acao" data-acao="copiar"><span aria-hidden="true">📋</span>Copiar telefone</button>` +
-    (l.cliente_id ? `<button type="button" class="acao" data-acao="ficha360"><span aria-hidden="true">🪪</span>Ficha 360</button>` : '');
+    ((l.cliente_id || U.telE164(l.telefone)) ? `<button type="button" class="acao" data-acao="ficha360"><span aria-hidden="true">🪪</span>Ficha 360</button>` : '');
   renderRespFicha(l);
   $('#lfEtapas').innerHTML = STATUSES.map(s => `<button type="button" class="etapa-btn" data-etapa="${esc(s)}" aria-pressed="${s === l.status}">${esc(LABEL_STATUS[s] ?? s)}</button>`).join('');
 }
@@ -479,7 +480,7 @@ $('#lfAcoes').addEventListener('click', async e => {
   const b = e.target.closest('[data-acao]'); if (!b) return;
   const l = TODOS.find(x => String(x.id) === String(LEAD_ABERTO)); if (!l) return;
   if (b.dataset.acao === 'copiar') { try { await navigator.clipboard.writeText(U.telE164(l.telefone) || l.telefone); toast('Telefone copiado'); } catch { toast('Não consegui copiar. Telefone: ' + l.telefone); } }
-  if (b.dataset.acao === 'ficha360') { fecharModal(true); abrirFichaCliente(l.cliente_id); }
+  if (b.dataset.acao === 'ficha360') { fecharModal(true); abrirFichaCliente(l.cliente_id || { tel: U.telE164(l.telefone) }); }
 });
 $('#lfEtapas').addEventListener('click', async e => {
   const b = e.target.closest('[data-etapa]'); if (!b || b.getAttribute('aria-pressed') === 'true') return;
@@ -524,6 +525,12 @@ async function carregarLinhaTempo(l) {
   }
   // outros leads do mesmo cliente entram como marcos da história
   if (ctx && fonte === 'servidor' && Array.isArray(ctx.leads)) for (const x of ctx.leads) if (String(x.id) !== String(l.id)) reserva.push({tipo: 'evento', quando: x.created_at, titulo: 'Outro lead · ' + (LABEL_STATUS[x.status] ?? x.status), detalhe: x.servico || ''});
+  if (ctx && fonte === 'servidor') {
+    const tags = $('#lfTopo .lf-tags');
+    const os = (ctx.patio || []).find(o => !['entregue', 'cancelado'].includes(o.etapa));
+    if (tags && ctx.sinais?.aguardandoConsultor && !tags.querySelector('.tag-espera')) tags.insertAdjacentHTML('beforeend', '<span class="tag tag-area tag-espera" title="A conversa no Atendimento está marcada como esperando consultor">⏳ cliente esperando consultor</span>');
+    if (tags && os && !tags.querySelector('.tag-patio')) tags.insertAdjacentHTML('beforeend', `<a class="tag tag-patio" href="${esc(os.abrir || '#')}" target="_blank" rel="noopener" title="Abrir a ordem no Pátio">🔧 carro na oficina · ${esc(ETAPA_PATIO[os.etapa] || os.etapa)}</a>`);
+  }
   const itens = U.linhaDoTempo(ctx, reserva);
   alvo.innerHTML = itens.length ? itens.slice(0, 80).map(i => `<li class="tl-${esc(i.tipo)}"><span class="tl-ico" aria-hidden="true">${ICONE_TL[i.tipo] || '•'}</span>
       <div><div class="tl-topo"><strong>${esc(i.titulo)}</strong><time datetime="${esc(i.quando)}">${esc(new Date(i.quando).toLocaleString('pt-BR', {day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit'}))}</time></div>
@@ -536,6 +543,7 @@ function preencherForm(l, pre = {}) {
   $('#fCarro').value = v('carro_modelo'); $('#fPlaca').value = v('placa'); $('#fServico').value = v('servico');
   $('#fOrigemForm').value = v('origem', 'organico'); $('#fOrcado').value = v('valor_orcado'); $('#fPago').value = v('valor_pago');
   $('#fStatusForm').value = v('status', 'novo'); $('#fCampanha').value = v('utm_campaign'); $('#fObs').value = v('observacoes');
+  $('#fUtmSource').value = v('utm_source'); $('#fUtmMedium').value = v('utm_medium');
   if (l?.servico && $('#fServico').value !== l.servico) { $('#fServico').insertAdjacentHTML('beforeend', `<option value="${esc(l.servico)}">${esc(l.servico)}</option>`); $('#fServico').value = l.servico; }
   limparErros(); $('#avisoDuplicado')?.remove();
   FORM_INICIAL = valoresForm();

@@ -27,7 +27,7 @@ function agendarFila() {
   clearInterval(TIMER_FILA);
   if (!FILA_MEM.length) return;
   TIMER_FILA = setInterval(async () => {
-    try { const r = await fetch('/api/ping', {cache: 'no-store', signal: AbortSignal.timeout(15000)}); if (r.ok) reenviarFila(); } catch { /* ainda fora */ }
+    try { const r = await fetch(IndyCarApps.rota('/api/ping'), {cache: 'no-store', signal: AbortSignal.timeout(15000)}); if (r.ok) reenviarFila(); } catch { /* ainda fora */ }
   }, 20000);
 }
 async function reenviarFila() {
@@ -55,7 +55,7 @@ window.addEventListener('online', () => setTimeout(reenviarFila, 1500));
 renderFila(); agendarFila();
 
 /* ================= rascunho do lead (não perder o que foi digitado) ================= */
-const CAMPOS_FORM = ['fNome', 'fTelefone', 'fCarro', 'fPlaca', 'fServico', 'fOrigemForm', 'fOrcado', 'fPago', 'fStatusForm', 'fCampanha', 'fObs'];
+const CAMPOS_FORM = ['fNome', 'fTelefone', 'fCarro', 'fPlaca', 'fServico', 'fOrigemForm', 'fOrcado', 'fPago', 'fStatusForm', 'fCampanha', 'fUtmSource', 'fUtmMedium', 'fObs'];
 let TIMER_RASCUNHO = null;
 const chaveAtual = () => R4.chaveRascunho(editId);
 function guardarRascunho() {

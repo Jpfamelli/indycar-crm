@@ -670,3 +670,168 @@ Confiabilidade com o Render dormindo, velocidade, valor pago, distribuição dos
 9. A IA do CRM recebe o resumo do pátio **sem valores** (etapa, datas, quantos extras aprovados/recusados/pendentes) e se o cliente indicou ou veio por indicação.
 10. O Pátio é extra na ficha: se as tabelas não responderem, a ficha e a linha do tempo abrem normalmente (testado).
 11. `lib/patio-crm.js` (leitura + regras puras), `CrmUtils.casaOrigem` e `testes/patio-crm.test.cjs` (6 testes); mock com uma passagem pelo pátio e uma indicação; roteiro de navegador 1440/375 (linha do tempo, lead indicado, filtros, ficha do cliente) sem erro e sem rolagem lateral. Service worker `indycar-crm-v7`.
+
+
+# Rodada 5 (16/10/2026)
+
+Conectar tudo (ficha 360 em uma chamada, telefone normalizado), operação profissional (busca global, filtros salvos, lotes, teclado, auditoria), leads sem dono com rodízio sugerido, campanha do Comunicar a partir do CRM, previsão de faturamento pelo funil no resumo da IA e preparo para a IndyCar Central (handler exportado, caminhos relativos, montagem em `/crm/`). Cada linha foi conferida por `node --test` (148 testes; 24 novos em `testes/r5-utils.test.cjs` e `testes/r5-servidor.test.cjs`) e/ou no navegador (puppeteer-core + Chrome, servidor falso com 160 leads, gestor e atendente, 1440 e 375 px, solto e montado em `/crm/`: 119 verificações, zero erro de página, zero rolagem lateral — `testes/r5-navegador.mjs`).
+
+## Central (onda B2): o CRM como módulo
+1. `server.js` exporta `{ handler, iniciar, PREFIXO, VERSAO }`; `listen` só acontece em `iniciar()`, chamado quando o arquivo é o programa principal (`require.main === module`). Importar o CRM não abre porta nem liga temporizador.
+2. `iniciar()` concentra os timeouts (headers 66 s, keep-alive 65 s, request 30 s) e as automações: antes elas ligavam ao importar o módulo.
+3. Prefixo de montagem: `req.prefixo` (posto pela Central) ou a variável `PREFIXO`; o handler tira o prefixo do caminho quando ele ainda vem na URL.
+4. `/crm` sem a barra final redireciona (308) para `/crm/` — os caminhos relativos da tela precisam da pasta.
+5. `GET /api/ping` devolve `prefixo` (a Central confere onde o app está montado) e versão `-r5`.
+6. `lib/apps.js`: um lugar só para os endereços dos apps (`HOSTS`, `CRM_URL_*` continua valendo), quem mora junto na Central (`/agenda/`, `/atendimento/`, `/crm/`, `/comunicar/`), `linkApp` (host solto ou irmão na Central), `linkCrm`, `normalizarPrefixo`, `raizDe` e `origens`.
+7. `lib/acesso.js` (apps da tela "sem acesso") e `lib/contexto-lead.js` (links da ficha) leem os endereços de `lib/apps.js` — acabaram as listas repetidas.
+8. Aviso de distribuição (`/?meus=1`) e links das campanhas levam o prefixo quando o CRM está montado.
+9. CORS do ecossistema inclui o Pátio (`indycar-patio.netlify.app`).
+10. `public/apps.js` (carrega antes de tudo): descobre a pasta da página (`BASE` = `/` ou `/crm/`), se está na Central, a raiz dela, `rota('/api/x')` → `/crm/api/x`, `absoluto()`, `urlApp(app, caminho)` (irmão na Central, host solto fora dela), `origemApp`, `lista()` para o seletor; `window.INDYCAR_APPS` sobrepõe tudo.
+11. `rota()` não dobra o prefixo (`/crm/api` continua `/crm/api`) — achado no roteiro do navegador: a IA pedia `/crm/crm/api`.
+12. Toda chamada da tela passa por `rota()`: `api()` do app.js, `fetch` de ping/config/primeiro-acesso (acesso.js, rodada4.js, app.js) e a reserva do crm-ia.js.
+13. `redirectTo` do "esqueci a senha" é a pasta do app (na Central, `/crm/`), não a raiz do domínio.
+14. `index.html`: manifest, ícones e `sw.js` relativos (nada começa com `/`).
+15. `manifest.json` com `start_url` e `scope` `./` e ícones relativos: instalável em `/` e em `/crm/`.
+16. Service worker v8: tudo relativo ao escopo do registro (`self.registration.scope`); só intercepta o que está dentro da pasta do app (na Central, `/agenda/` é de outro service worker); `api/` continua fora do cache; lista de instalação com `apps.js` e `rodada5.js`.
+17. `crm-utils`: links para Atendimento, Agenda e Comunicar passam por `apps.js` quando ele está na página (contrato `?tel=` mantido); no Node continuam os fixos.
+18. `linkNotificacao` entende a base de cada app na Central (notificação do CRM abre dentro de `/crm/`), aceita `http://localhost` dos ensaios e continua barrando `javascript:` e domínios de fora.
+19. Seletor "Ecossistema IndyCar" montado de `apps.js`: ganha o Pátio; na Central mostra "Central · início" e os irmãos abrem na mesma aba (fora dela, em outra aba, como antes).
+20. Servidor falso dos testes usa o `handler` exportado e, com `prefixo: '/crm'`, faz o papel da Central (proxy mínimo que tira o prefixo e põe `req.prefixo`). `scripts/mock-server.mjs` tem `MOCK_PREFIXO=/crm` para o mesmo ensaio no Chrome; o Supabase falso ficou relativo.
+21. Teste varre a tela: nenhum `fetch('/…')`, `href="/…"` ou `src="/…"` absoluto na raiz; `sw.js` sem `/api/` fixo; manifest relativo.
+22. Teste do servidor montado em `/crm/`: página, `sw.js`, manifest, API, 404 fora do prefixo, aviso com `/crm/?meus=1`, `/api/eu` com irmãos, ficha 360 com links irmãos; e com `PREFIXO=/crm` na variável: `/crm/api/ping` responde e `/crm` vira `/crm/` (308).
+23. Roteiro do navegador em `/crm/` (1440 e 375): todas as chamadas da API levam o prefixo, `apps.js` detecta a Central, manifest/ícones relativos, e todo o resto do roteiro funciona igual ao modo solto.
+24. `GET /api/eu` na Central devolve os outros apps como caminhos irmãos (`/agenda/`…) e o `prefixo`; fora dela, os hosts de sempre.
+
+## Ficha 360 em UMA chamada (rpc `cliente_360`)
+25. `GET /api/clientes/360?tel=` (qualquer formato) ou `?cliente=<uuid>`: uma rpc no lugar de sete consultas; o servidor só acrescenta os links cruzados.
+26. Erros claros: papel sem permissão (42501) → 403; telefone inválido (22023) → 400; rpc ainda não aplicada → 503 com recado — e a tela cai na ficha antiga.
+27. Links cruzados montados no servidor (`linksFicha`): conversa no Atendimento (direto em `/?conversa=` quando existe), Agenda por agendamento (`/?agendamento=`), Pátio por ordem (`/?os=`), Orçador por orçamento, leads do CRM, WhatsApp e ligar — com host de cada app ou caminho irmão na Central.
+28. A resposta traz os motivos de perda padrão (`motivosPerda`) para a tela não ter lista própria.
+29. Topo da ficha: nome, telefone, e-mail, carro + ano + placa, "cliente desde", origem, **"Veio por indicação de X"**, **"Carro na oficina · etapa"** e "não aceita mensagens".
+30. Oito indicadores: já gastou, serviços feitos, última visita, próximo horário, faltas (em alerta a partir de 2), não fechou, leads (com quantos abertos) e mensagens trocadas.
+31. Ações: abrir conversa, WhatsApp, ligar, agendar, mandar mensagem e criar lead — todas com o telefone certo.
+32. Bloco "Conversa no WhatsApp": etapa do funil, com quem está, **"cliente esperando consultor"** em destaque, quando foi a última mensagem e as 5 últimas em balões (cliente / oficina / IA).
+33. Bloco "Leads": serviço, origem + fonte utm, data, responsável, etapa e valor; clique abre o lead.
+34. Bloco "Agendamentos": serviço, dia/hora, **consultor**, carro, status, valor e botão que abre o agendamento na Agenda.
+35. Bloco "Pátio": ordem, etapa, **extras esperando o cliente**, carro/placa/serviço, entrada → entrega ou previsão, mecânico, botão para o Pátio e **"Link do cliente"** (copia o link de acompanhamento).
+36. Bloco "Orçamentos": número, status, enviado/decidido, motivo da recusa, total e botão para o Orçador.
+37. Bloco "Comunicar": tipo, status, data, se o cliente respondeu (e como) e o motivo de pulado.
+38. Bloco "Tarefas abertas": urgência, título, responsável, vencimento e app de origem.
+39. Bloco "Indicações": cada amigo indicado com situação; clique abre o lead gerado.
+40. Observações e o formulário de aniversário/mensagens continuam na ficha nova.
+41. Rodapé explica de onde veio tudo ("uma consulta só… pelo telefone X").
+42. "Ficha 360" aparece no lead **mesmo sem `cliente_id`** (acha pelo telefone); sem cadastro ainda, a tela explica quando ele nasce.
+43. Dublê do banco nos testes ganhou a rpc `cliente_360` (mesma forma do Postgres, casando por `telefone_e164` ou `cliente_id`) e calcula `telefone_e164` sozinho a partir de `telefone`.
+44. Teste: ficha com cliente, 2 leads (um só pelo telefone), agenda com falta, pátio com extra pendente e link do cliente, conversa esperando consultor, mensagens, Comunicar, tarefa, indicação, resumo e links; por id também; uma única rpc por ficha; rpc fora → 503.
+45. Conferido no banco real (só leitura): a rpc responde para um cliente real com as mesmas chaves que a tela usa.
+46. Ficha do lead ganha os sinais do ecossistema vindos do contexto: **"⏳ cliente esperando consultor"** e **"🔧 carro na oficina · etapa"** (link para a ordem no Pátio).
+
+## Telefone normalizado (`telefone_e164`) em todo lugar
+47. `GET /api/lead-por-telefone` deixou de varrer `leads.telefone` com `like '%8 finais'`: usa `telefone_e164 in (com/sem nono dígito)` + os leads do cliente (telefone digitado diferente). Outro DDD com os mesmos 8 finais não entra mais.
+48. `normalizarTelefone`/`variantesTelefone` compartilhados (servidor) — a mesma regra da coluna gerada do banco.
+49. Busca global, ficha 360 e destinos da campanha trabalham com o telefone normalizado.
+
+## Busca global (Ctrl+K)
+50. Botão "Buscar tudo" no topo e atalho **Ctrl+K** (Cmd+K no Mac) em qualquer tela; a busca da barra passou a dizer que filtra a lista.
+51. Resposta em dois tempos: o que já está na tela aparece na hora; a base inteira de clientes chega do servidor logo depois ("Procurando também na base…").
+52. `GET /api/busca?q=`: nome sem acento, final do telefone (4+ dígitos), placa com ou sem traço e carro/serviço; leads abertos vêm antes dos fechados; até 8 por grupo.
+53. Resultados em três grupos (Leads / Clientes / Telas), com etapa, telefone formatado, placa, carro e "por telefone/placa" quando não foi pelo nome.
+54. Ctrl+K também leva a uma tela ("Ir para Relatórios", "Ir para Leads sem dono"), só as que o papel vê.
+55. Teclado completo: ↑ ↓ escolhem, Enter abre, Esc fecha (mesmo com texto digitado); `role=combobox` + `aria-activedescendant` para leitor de tela.
+56. Telefone sem cadastro oferece **"Cadastrar lead com este telefone"** (já preenchido).
+57. Clique num cliente abre a ficha 360; num lead, a ficha do lead.
+58. Estado vazio ensina (2 letras, 4 números ou a placa; dica do final do telefone/placa sem traço).
+59. No celular o item vira duas linhas e o diálogo ocupa a largura toda.
+
+## Filtros salvos (por pessoa, em qualquer aparelho)
+60. `GET/PUT /api/filtros`: gravam em `perfis.preferencias.crm_filtros` **mesclando** com as outras chaves (tema, tour, avisos continuam).
+61. Validação: nome obrigatório (até 40), sem repetir, no máximo 12, só os campos conhecidos (etapa, origem, responsável, ordem, parados, sem valor).
+62. Seletor "Filtros salvos" + botão "Salvar filtro" na barra da lista; o diálogo descreve o que vai guardar ("Orçamento · Google · só parados…").
+63. Aplicar um filtro leva para Leads e refaz a lista; apagar tem "Desfazer".
+64. Reserva: sem servidor, a tela usa os filtros que já vieram no perfil.
+65. Filtro de responsável mostra quantos estão sem dono: "Sem responsável (442)".
+
+## Lotes e campanha do Comunicar
+66. `POST /api/leads/campanha {ids, corpo, enviar_em?, detalhe?}`: cria a campanha em `comunicar_campanhas` como **proposta aguardando** — quem aprova é o gestor, no Comunicar (nada sai do CRM sozinho).
+67. Destinos únicos por telefone, no formato do Comunicar (`cliente_id, telefone, nome, carro, placa` + `lead_id`); o mesmo telefone em dois leads fica um destino, completando o que faltava.
+68. Validações: 1 a 300 leads, mensagem com 10+ caracteres, vocabulário proibido (prezado/efetuar/comparecer/veículo) recusado, data de envio no passado recusada.
+69. Gestores e admins ativos recebem um aviso cada (chave única por campanha/pessoa) com link `/?campanha=` no Comunicar.
+70. Auditoria `campanha_comunicar` com quantidade de leads, destinos, data e avisados.
+71. Botão **"✉️ Campanha no Comunicar"** na barra de seleção; o diálogo conta leads e telefones distintos, traz um modelo com `{nome}`/`{carro}`/`{placa}`, data de envio e detalhe interno, e explica que o gestor aprova.
+72. A tela barra preço e vocabulário proibido antes de mandar; depois, toast com "Abrir no Comunicar" (na Central, na mesma aba) e a seleção é limpa.
+73. Lotes anteriores (passar responsável — gestor; perdido com motivo; origem; exportar seleção) continuam na mesma barra.
+
+## Leads sem dono: rodízio sugerido (o gestor aplica)
+74. `GET /api/leads/sem-dono` (gestor): resumo dos leads abertos sem responsável (total, por etapa, por origem, por idade: até 7 / 7–30 / 30–90 / +90 dias, valor orçado, o mais antigo) + quem pode receber (recebe leads + CRM, com a carga de hoje) + rodízio sugerido pronto para gravar. **Nada é gravado nesta rota.**
+75. Regra do rodízio sugerido: quem tem menos leads abertos recebe primeiro até igualar; orçamentos e agendados saem antes, mais antigos primeiro; até 1.000 por vez.
+76. A aba "Distribuir" virou **"Leads sem dono"** (título, subtítulo, atalhos e tour) com um selo na navegação com a contagem.
+77. Card no topo: contagem, valor orçado e idade do mais antigo; chips por etapa e por idade.
+78. Tabela do rodízio: pessoa, abertos hoje, quantos recebe, por etapa e com quantos fica; "Ver lead por lead" (até 200) e "Ver os sem responsável na lista".
+79. **"Aplicar o rodízio sugerido (N)"** pede confirmação e grava pela rota de distribuição da rodada 4 (auditoria `distribuir_leads`, um aviso por pessoa, histórico e **Desfazer**); depois recalcula.
+80. "Recalcular" refaz a sugestão; nota deixa claro que nada muda sozinho.
+81. Estados: "Todos os leads abertos têm dono 🏁" e "ninguém marcado para receber leads" com o caminho para ligar.
+82. A distribuição manual com filtros (rodada 4) continua logo abaixo.
+83. No banco real hoje: 442 leads **abertos** sem responsável (589 contando concluídos/perdidos, que não precisam de dono). Nenhum foi distribuído por mim.
+
+## Previsão de faturamento pelo funil
+84. `previsaoPipeline`: valor orçado × chance da etapa (novo 10 %, contato 25 %, orçamento 45 %, agendado 70 %, em serviço 90 %), ajustada pela conversão real dos últimos 90 dias (fator 0,5–1,5; só com 10+ fechamentos; teto 95 %); leads sem valor orçado ficam fora e são contados.
+85. `GET /api/previsao` (gestor: loja; atendente: `?meus=1`).
+86. Card "Previsão pelo funil" no painel: quanto deve entrar, orçado em aberto, nota da conversão usada e alerta dos leads sem valor orçado; barras por etapa com chance e valor previsto.
+87. Clicar numa etapa do card abre a lista já filtrada por ela (também por teclado).
+88. Cache de 60 s na tela e card escondido quando não há lead aberto.
+89. Resumo da IA (`POST /api/resumo-ia`) leva o bloco "PREVISÃO PELO FUNIL" no briefing e devolve `previsao` para a tela; a aba IA mostra a previsão junto do texto.
+90. Prompt do resumo ganhou "📈 Previsão pelo funil" (uma ou duas frases) e **"✅ O que fazer esta semana"**: exatamente três ações numeradas, cada uma com o quê, com quem/onde e o número que justifica.
+91. Prompt do resumo: valores são internos, nunca preço ao cliente.
+
+## Modelos da Claude conforme as regras
+92. `parametrosModelo(modelo)`: Sonnet recebe `thinking: {type: 'between_tools'}`; Opus/Haiku recebem `output_config: {effort: 'low'}` — aplicado em todas as chamadas da IA do CRM e no resumo (`tool_choice: auto` já era).
+
+## Motivos de perda padronizados (meio-termo)
+93. Lista única no servidor (`MOTIVOS_PERDA`, 7 itens) e `GET /api/motivos-perda`.
+94. `motivoPadrao(texto)`: texto livre vira um dos padrões (caro/preço → "Achou caro", concorrência → "Foi em outra oficina", sumiu → "Sem retorno", vendeu o carro → "Desistiu", amanhã/urgente → "Prazo não atendeu", resto → "Outro").
+95. Fechar como perdido grava na auditoria o motivo digitado **e** o padronizado.
+96. Painel e Relatórios agrupam os motivos pelo padrão (antes cada texto livre virava uma linha).
+
+## Origem e UTM visíveis
+97. Formulário do lead ganhou **Fonte (utm_source)** e **Mídia (utm_medium)** ao lado da Campanha; salvam no lead (validação de tamanho, `null` aceito) e entram no rascunho.
+98. Topo da ficha do lead mostra a origem detalhada ("Meta / Instagram · Instagram · story · campanha x"; fonte igual à origem não repete; `area_cliente` vira "Área do Cliente").
+99. Coluna opcional **Fonte (utm)** na lista de leads (fonte · mídia), ligável no menu Colunas.
+100. CSV dos leads ganhou Fonte, Mídia e **Motivo da perda (padronizado)**.
+101. "Veio por indicação de X" continua no lead e agora também na ficha 360.
+
+## Teclado e atalhos
+102. **M** no cartão do funil leva o foco ao seletor de etapas (mover sem mouse, além de Shift+setas).
+103. **↑ ↓** andam pelas linhas da lista de leads; no fim, vai para "próxima página".
+104. **X** marca/desmarca a linha em foco (abre a barra de lote).
+105. Diálogo de atalhos lista Ctrl+K, M, ↑↓ e X.
+106. Ajuda ganhou cinco perguntas: achar cliente rápido, ver tudo de um cliente, guardar um filtro, mandar mensagem para vários, leads sem dono (gestor).
+
+## Exportação e auditoria
+107. Exportar CSV da lista registra na auditoria (`exportar_csv`, tipo leads) a quantidade e os filtros usados (etapa, origem, responsável, parados, sem valor, se havia busca) — sem o termo digitado.
+108. Campanha, rodízio aplicado e fechamento com motivo também ficam na auditoria (acima).
+
+## Servidor falso, testes e verificação
+109. Mock com as rotas novas no formato do servidor real: `/api/clientes/360`, `/api/busca`, `/api/leads/sem-dono`, `/api/leads/campanha`, `/api/filtros`, `/api/previsao`, `/api/motivos-perda`; resumo fictício com "O que fazer esta semana" e previsão; leads com utm.
+110. `testes/r5-utils.test.cjs` (12): telefone, motivos, parâmetros por modelo, previsão, sem dono/rodízio, busca, filtros, destinos, links da ficha, `lib/apps`, `public/apps.js` em dois modos, origem detalhada.
+111. `testes/r5-servidor.test.cjs` (12): exportação do handler e caminhos relativos, montagem em `/crm/`, `PREFIXO`, ficha 360, lead por telefone, busca, sem dono + aplicar + desfazer, campanha, filtros, previsão, motivo na auditoria + utm, resumo com previsão e parâmetros do modelo.
+112. `testes/r5-navegador.mjs`: 119 verificações no Chrome (gestor 1440, atendente 375, e as duas em `/crm/`), com capturas.
+113. Testes antigos adaptados ao handler exportado (`servidor-falso.cjs`, `server-ia.test.cjs`); a versão do ping aceita r5; o teste dos motivos espera o padrão.
+114. `npm run segredos`: nada; `npm audit`: 0 vulnerabilidades.
+
+## Polimento
+115. Componentes novos só com as variáveis da casa (tema claro e escuro), movimento reduzido respeitado, 375 px sem rolagem lateral (conferido em todas as telas do roteiro).
+116. Tabelas do rodízio e da ficha rolam dentro do cartão no celular.
+117. Botão "Buscar tudo" vira só o ícone em telas estreitas.
+118. Preferências do perfil continuam mescladas no servidor (filtros salvos usam a mesma regra; nada regrediu — testado com tema e tour guardados).
+
+## Como verifiquei
+- `npm test`: 148 passando (124 antes + 24 novos); `npm run segredos` limpo; `npm audit` 0.
+- `node testes/r5-navegador.mjs`: 119/119 no Chrome (puppeteer-core), solto e em `/crm/`, 1440 e 375 px, gestor e atendente; capturas no diretório de saída.
+- Banco real, só leitura: rpc `cliente_360` existe e responde com as chaves esperadas para um cliente real; `leads.telefone_e164` existe; colunas de `comunicar_campanhas` batem com o que o CRM grava; contagem dos leads sem dono. Nenhuma escrita, nenhum DDL nesta rodada (nada com prefixo `crm_` foi preciso).
+- Nenhuma senha digitada; nenhum segredo em arquivo versionado.
+
+## Pendências
+- **Comunicar**: a campanha criada pelo CRM entra em `comunicar_campanhas` como `aguardando` com `destinos` (lista) — o fluxo de aprovação do Comunicar já lê esse formato; vale o Comunicar mostrar "veio do CRM" (campo `criado_por_nome`) e confirmar que o aviso `tipo: 'campanha'` tem ícone lá.
+- **Central (B2)**: o CRM aceita `req.prefixo` (a Central tira o prefixo do `req.url`) e `PREFIXO`; os redirecionamentos 308 do host antigo (indycar-crm.onrender.com → …/crm/) são da Central, não deste repositório.
+- Os 442 leads abertos sem dono continuam sem dono de propósito: o gestor aplica o rodízio sugerido em "Leads sem dono" (auditado, com desfazer).
+- Previsão: sem 10 fechamentos nos últimos 90 dias a conta usa as chances padrão; com `valor_pago` e `valor_orcado` preenchidos ela fica honesta — a tela avisa quantos leads abertos estão sem valor.

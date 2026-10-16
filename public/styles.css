@@ -1220,3 +1220,70 @@ dialog.dlg .dv-cort{flex-direction:row;align-items:center;gap:6px;white-space:no
 .badge.b-ind-nova{background:rgba(245,158,11,.14);border-color:rgba(245,158,11,.4)}
 .badge.b-ind-descartada{opacity:.7}
 #linhaTempo .tl-patio .tl-ico,#linhaTempo .tl-indicacao .tl-ico{filter:saturate(1.2)}
+
+/* ---- Rodada 5 (16/10/2026): busca global, filtros salvos, ficha 360, leads sem dono, previsão, campanha ---- */
+.busca-global-btn{display:inline-flex;align-items:center;gap:7px;color:var(--gray)}
+.busca-global-btn kbd{font-size:.68rem;padding:1px 6px;border:1px solid var(--line);border-radius:5px;background:var(--superficie);color:var(--gray-2)}
+.busca-global-btn:hover{color:var(--texto)}
+dialog.dlg-busca{width:min(640px,calc(100vw - 32px));padding:14px;margin-top:8vh}
+.bg-campo{display:flex;align-items:center;gap:10px;padding:4px 8px;border:1px solid var(--line);border-radius:12px;background:var(--campo-fundo)}
+.bg-campo input{flex:1;border:none;background:transparent;color:var(--texto);font:inherit;font-size:1.05rem;padding:10px 4px;outline:none}
+.bg-campo kbd{font-size:.68rem;padding:2px 6px;border:1px solid var(--line);border-radius:5px;color:var(--gray-2)}
+.bg-resultados{margin-top:10px;max-height:min(60vh,520px);overflow-y:auto;display:flex;flex-direction:column;gap:3px}
+.bg-grupo{font-family:var(--font-cond);font-weight:600;letter-spacing:.14em;text-transform:uppercase;font-size:.7rem;color:var(--gray-2);margin:8px 6px 2px}
+.bg-item{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;width:100%;text-align:left;padding:9px 10px;border-radius:10px;border:1px solid transparent;background:transparent;color:var(--texto);cursor:pointer;font:inherit}
+.bg-item:hover,.bg-item.foco{background:var(--superficie);border-color:var(--line)}
+.bg-item.foco{outline:2px solid var(--red);outline-offset:-2px}
+.bg-ico{font-size:1.1rem}
+.bg-txt2{display:flex;flex-direction:column;min-width:0}.bg-txt2 small{color:var(--gray);font-size:.8rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bg-meta{display:flex;flex-direction:column;align-items:flex-end;gap:3px}.bg-meta small{color:var(--gray-2);font-size:.7rem}
+.bg-nota{color:var(--gray-2);font-size:.78rem;margin:6px}
+.filtros-salvos{display:inline-flex;align-items:center;gap:6px;font-size:.84rem;color:var(--gray)}
+.filtros-salvos select{max-width:190px}
+.link-btn{background:none;border:none;color:var(--red);text-decoration:underline;cursor:pointer;font:inherit;padding:0}
+/* ficha 360 */
+.ficha-kpi.alerta b{color:var(--amarelo-txt)}
+.ficha-kpi b small{font-size:.7rem;color:var(--gray);font-weight:500}
+.tag.tag-patio{background:rgba(59,130,246,.14);border:1px solid rgba(59,130,246,.4);white-space:nowrap}
+.f360-msgs{list-style:none;display:flex;flex-direction:column;gap:6px;margin-top:6px}
+.f360-msgs li{padding:8px 11px;border-radius:12px;font-size:.88rem;line-height:1.45;max-width:92%;background:var(--superficie)}
+.f360-msgs li small{display:block;color:var(--gray-2);font-size:.72rem;margin-bottom:2px}
+.f360-msgs li.de-oficina{align-self:flex-end;background:rgba(229,9,20,.1);border:1px solid rgba(229,9,20,.25)}
+.f360-lista{list-style:none;display:flex;flex-direction:column;gap:5px;font-size:.88rem;color:var(--texto-suave)}
+.f360-lista li{padding:6px 0;border-bottom:1px solid var(--line-2)}
+.mini-tabela .col-acao{white-space:nowrap}
+/* leads sem dono */
+.card-sem-dono{border-color:rgba(229,9,20,.35)}
+.sd-resumo{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:4px 0 12px}
+.sd-chip{display:inline-flex;align-items:baseline;gap:5px;padding:5px 10px;border-radius:9px;border:1px solid var(--line);background:var(--superficie);font-size:.8rem;color:var(--gray)}
+.sd-chip b{font-family:var(--font-cond);font-size:1.1rem;color:var(--texto)}
+.sd-sep{width:1px;height:22px;background:var(--line);margin:0 4px}
+.sd-rodizio .table td,.sd-rodizio .table th{padding:8px 10px}
+/* previsão pelo funil */
+.pv-topo{display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap;margin-bottom:10px}
+.pv-num{display:flex;flex-direction:column}
+.pv-num span{font-family:var(--font-cond);font-weight:600;letter-spacing:.12em;text-transform:uppercase;font-size:.7rem;color:var(--gray)}
+.pv-num b{font-family:var(--font-cond);font-weight:700;font-size:2rem;line-height:1.1;color:var(--verde-txt)}
+.pv-num small{color:var(--gray);font-size:.8rem}
+.pv-nota{flex:1 1 260px;color:var(--gray);font-size:.84rem;line-height:1.5;align-self:center}
+.pv-prev{font-family:var(--font-cond);min-width:84px;text-align:right;color:var(--verde-txt)}
+.card-previsao .fm-num{min-width:92px;text-align:right}
+.pv-ia{margin-bottom:12px;padding:10px 12px;border-radius:10px;background:var(--superficie)}
+.pv-linha{cursor:pointer;border-radius:8px}.pv-linha:hover,.pv-linha:focus-visible{background:var(--superficie);outline:none}.pv-linha:focus-visible{box-shadow:0 0 0 2px var(--red)}
+/* campanha */
+#dlgCampanha textarea{width:100%;min-height:96px;resize:vertical}
+#dlgCampanha label small{display:block;color:var(--gray-2);font-size:.76rem;margin-top:4px}
+@media (max-width:860px){
+  .busca-global-btn .bg-txt,.busca-global-btn kbd{display:none}
+  .card-previsao .fm-num{min-width:70px}
+  .card-previsao .fm-taxa{display:none}
+  .pv-num b{font-size:1.6rem}
+}
+@media (max-width:480px){
+  dialog.dlg-busca{margin-top:4vh;padding:10px}
+  .bg-item{grid-template-columns:auto 1fr}
+  .bg-meta{grid-column:2;flex-direction:row;align-items:center}
+  .filtros-salvos select{max-width:140px}
+  .f360-msgs li{max-width:100%}
+}
+@media (prefers-reduced-motion:reduce){.bg-item{transition:none}}

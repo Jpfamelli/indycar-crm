@@ -30,6 +30,8 @@
     return cab;
   }
   async function api(url, opts = {}) {
+    // rodada 5: caminho relativo à pasta do app (Central: /crm/)
+    if (window.IndyCarApps && !/^https?:/i.test(url)) url = window.IndyCarApps.rota(url);
     // rodada 4: pelo pedido da tela (window.IndyCar.pedir) a IA ganha a espera do
     // "sistema acordando", a renovação do login e a chave de idempotência
     if (typeof IC().pedir === 'function') {

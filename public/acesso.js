@@ -169,7 +169,7 @@ $('#formEsqueci').addEventListener('submit', async e => {
   if (Date.now() - ultimo < 60000) { erro.textContent = 'Acabamos de enviar um link. Espere um minuto antes de pedir outro.'; erro.hidden = false; return; }
   btn.disabled = true; btn.textContent = 'ENVIANDO…';
   try {
-    const {error} = await sb.auth.resetPasswordForEmail(email, {redirectTo: location.origin + '/'});
+    const {error} = await sb.auth.resetPasswordForEmail(email, {redirectTo: IndyCarApps.absoluto('/')});
     if (error) throw error;
     gravarLS(LS_ESQUECI, Date.now());
     // não diz se o e-mail existe: só que, se existir, o link chega
@@ -497,7 +497,7 @@ async function buscarConfig() {
   const esperas = CrmR4.esperasAcordar();
   for (let i = 0; ; i++) {
     let status = 0, corpo = null;
-    try { const r = await fetch('/api/config', {cache: 'no-store', signal: AbortSignal.timeout(25000)}); status = r.status; try { corpo = await r.json(); } catch { /* sem JSON */ } } catch { /* rede */ }
+    try { const r = await fetch(IndyCarApps.rota('/api/config'), {cache: 'no-store', signal: AbortSignal.timeout(25000)}); status = r.status; try { corpo = await r.json(); } catch { /* sem JSON */ } } catch { /* rede */ }
     if (status === 200 && corpo && 'configurado' in corpo) { servidorRespondeu(); return corpo; }
     if (i >= esperas.length) return null;
     mostrarAcordando(i + 1, esperas.length, esperas[i]); await esperarAcordar(esperas[i]);
@@ -520,7 +520,7 @@ async function carregarConfig() {
   /* Rodada 4: a configuração (endereço e chave PÚBLICA do Supabase) fica guardada
      no aparelho. Com o Render dormindo, o login abre na hora (fala direto com o
      Supabase) e o servidor acorda enquanto a pessoa digita a senha. */
-  fetch('/api/ping', {cache: 'no-store'}).catch(() => {});   // já cutuca o servidor
+  fetch(IndyCarApps.rota('/api/ping'), {cache: 'no-store'}).catch(() => {});   // já cutuca o servidor
   CONFIG = await carregarConfig();
   if (!CONFIG) return mostrarLogin('Não consegui falar com o servidor depois de 3 minutos. Confira a internet e recarregue a página.');
   if (!CONFIG.configurado) {

@@ -12,12 +12,16 @@
 //   Rodada 4: MOCK_LEADS=700 gera mais leads (os extras antigos e sem responsável, para a distribuição);
 //   MOCK_DORMINDO=40 faz /api/* responder 503 em HTML (como o Render acordando) pelos primeiros 40 s;
 //   POST /__mock/dormir {segundos} faz o mesmo a qualquer momento. ?tour=1 mostra o tour de boas-vindas.
+//   Rodada 5: MOCK_PREFIXO=/crm monta o app em http://127.0.0.1:3101/crm/ (ensaio da Central).
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createRequire} from 'node:module';
 const PATIO = createRequire(import.meta.url)('../lib/patio-crm.js');
+const R5 = createRequire(import.meta.url)('../lib/rodada5.js');
+// Rodada 5: MOCK_PREFIXO=/crm serve o app montado num prefixo, como a IndyCar Central
+const PREFIXO = (p => p ? '/' + p : '')(String(process.env.MOCK_PREFIXO || '').trim().replace(/^\/+|\/+$/g, ''));
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public');
 const statuses = ['novo','contato','orcamento','agendado','em_servico','concluido','perdido'];
 const origens = ['meta','google','organico','whatsapp','indicacao','passagem'];
@@ -75,6 +79,7 @@ function gerarDados(agora = Date.now(), qtdLeads = Number(process.env.MOCK_LEADS
     const l = {id: `22222222-2222-4222-8222-${String(i).padStart(12, '0')}`, cliente_id: c.id, nome: c.nome, telefone: c.telefone,
       carro_modelo: c.carro_modelo, placa: c.placa, servico: pick(SERVICOS), origem: pick(origens), status: st,
       valor_orcado: orc, valor_pago: st === 'concluido' && i % 3 !== 0 ? orc || 180 : 0, utm_campaign: r() < .3 ? 'campanha-teste' : '',
+      utm_source: i % 6 === 1 ? 'instagram' : i % 6 === 2 ? 'site' : null, utm_medium: i % 6 === 1 ? 'story' : null,
       observacoes: st === 'perdido' && r() < .75 ? 'Motivo da perda: ' + pick(MOTIVOS) : '',
       created_at: new Date(criado).toISOString(), updated_at: new Date(mexido).toISOString(),
       closed_at: ['concluido','perdido'].includes(st) ? new Date(mexido).toISOString() : null,
@@ -328,7 +333,14 @@ export function criarMock({latencia = Number(process.env.MOCK_LATENCIA) || 0, ia
     return null;
   };
 
+  const filtros = new Map();      // papel → filtros salvos (rodada 5)
+  const campanhas = [];
   return http.createServer(async (req, res) => {
+    if (PREFIXO) {
+      if (req.url === PREFIXO) { res.writeHead(308, {Location: PREFIXO + '/'}); return res.end(); }
+      if (!req.url.startsWith(PREFIXO + '/')) { res.writeHead(404, {'Content-Type': 'text/plain; charset=utf-8'}); return res.end('fora do prefixo ' + PREFIXO); }
+      req.url = req.url.slice(PREFIXO.length);
+    }
     const url = new URL(req.url, 'http://localhost');
     const cabExtra = {};
     let json = (v, status = 200) => { res.writeHead(status, {'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...cabExtra}); res.end(JSON.stringify(v)); };
@@ -479,6 +491,49 @@ export function criarMock({latencia = Number(process.env.MOCK_LATENCIA) || 0, ia
         const aberto = ls.find(l => !['concluido','perdido'].includes(l.status)) || null;
         return json({cliente, leads: ls, aberto, lead: aberto || ls[0] || null});
       }
+      /* ---------- rodada 5 ---------- */
+      if (p === '/api/clientes/360') {
+        const cid = url.searchParams.get('cliente'), tel = R5.normalizarTelefone(url.searchParams.get('tel') || '');
+        const c = clientes.find(x => x.id === cid) || (tel ? clientes.find(x => R5.normalizarTelefone(x.telefone) === tel) : null);
+        if (!c) return json({erro: 'Informe o telefone com DDD (ou um cliente válido).'}, 400);
+        const fc = fichaCliente(c.id), ls = leads.filter(l => l.cliente_id === c.id), aberto = ls.find(l => !['concluido','perdido'].includes(l.status));
+        const t = R5.normalizarTelefone(c.telefone), ctx = aberto ? contexto(aberto) : null;
+        const ficha = {telefone: t, telefone_55: '55' + t, gerado_em: agoraIso(),
+          cliente: {...c, cliente_desde: c.created_at, link_crm: '/?cliente=' + c.id},
+          conversa: ctx ? {id: 'conversa-ficticia', status: 'aberta', etapa: 'Orçamento enviado (fictício)', atribuida_a_nome: EQUIPE_BASE[1].nome, aguardando_consultor: ls.length % 2 === 0, ultima_mensagem_em: aberto.updated_at, link: '/?conversa=conversa-ficticia'} : null,
+          mensagens: ctx ? ctx.mensagens.map(m => ({...m, anexo: false})).reverse() : [],
+          leads: ls.map(l => ({...l, link: '/?lead=' + l.id, responsavel_nome: equipe(pp).find(x => x.id === l.responsavel_id)?.nome || null})),
+          agendamentos: fc.agendamentos.map(a => ({...a, consultor: 'Consultor Fictício', link: '/?agendamento=' + a.id})),
+          patio: fc.patio.map(o => ({...o, link: '/?os=' + o.id, extras_pendentes: 1, mecanico: 'Mecânico Fictício', token_publico: 'tokfake', link_cliente: 'https://indycar-patio.netlify.app/acompanhar/?t=tokfake'})),
+          orcamentos: ctx ? ctx.orcamentos.map(o => ({...o, link: '/?orcamento=' + o.id})) : [],
+          comunicar: ctx ? ctx.comunicar : [], tarefas: tarefas.filter(x => x.status === 'aberta' && ls.some(l => l.id === x.lead_id)).map(x => ({...x, responsavel_nome: equipe(pp).find(y => y.id === x.responsavel_id)?.nome || null})),
+          indicacoes: {fez: fc.indicacoes.feitas, foi_indicado_por: INDICACOES_FALSAS.some(i => i.lead_id && ls.some(l => l.id === i.lead_id)) ? {cliente_id: C0, nome: clientes[0].nome, telefone: clientes[0].telefone, quando: hAtras(48)} : null},
+          resumo: {total_agendamentos: fc.agendamentos.length, servicos_feitos: fc.resumo.servicosFeitos, faltas: 0, nao_fechou: 0, gasto_agenda: 0, gasto_leads: fc.resumo.gasto, total_gasto: fc.resumo.gasto, ultima_visita: fc.agendamentos[0] ? fc.agendamentos[0].data + 'T09:30:00Z' : null, proximo_horario: null, carro_na_oficina: fc.patio.some(o => !['entregue','cancelado'].includes(o.etapa)), total_leads: ls.length, leads_abertos: ls.filter(l => !['concluido','perdido'].includes(l.status)).length, mensagens_total: ctx ? ctx.mensagens.length : 0, ultima_mensagem_em: aberto?.updated_at || null, tarefas_abertas: 0}};
+        return json({...ficha, links: R5.linksFicha(ficha), motivosPerda: R5.MOTIVOS_PERDA});
+      }
+      if (p === '/api/busca') return json(R5.buscaGlobal({leads, clientes}, url.searchParams.get('q') || '', {limite: 8}));
+      if (p === '/api/leads/sem-dono') {
+        if (!gestor) return json({erro: 'Só um gestor vê a distribuição dos leads sem responsável.', codigo: 'so_gestor'}, 403);
+        const carga = id => leads.filter(l => l.responsavel_id === id && !['concluido','perdido'].includes(l.status)).length;
+        const vendedores = equipe(pp).filter(x => x.ativo !== false && x.papel !== 'agenda' && x.recebe_leads !== false).map(x => ({id: x.id, nome: x.nome, abertos: carga(x.id), recebe_leads: true}));
+        const cargas = new Map(vendedores.map(v => [v.id, v.abertos]));
+        return json({resumo: R5.resumoSemDono(leads), vendedores, sugestao: R5.sugerirRodizio(leads, vendedores, {cargas}), leads: leads.filter(l => !l.responsavel_id && !['concluido','perdido'].includes(l.status)).slice(0, 1000)});
+      }
+      if (p === '/api/leads/campanha' && req.method === 'POST') {
+        const ids = Array.isArray(d.ids) ? d.ids : [], corpo = String(d.corpo || '').trim();
+        if (!ids.length || ids.length > 300) return json({erro: 'Escolha de 1 a 300 leads.'}, 400);
+        if (corpo.length < 10) return json({erro: 'Escreva a mensagem da campanha (pelo menos 10 caracteres).'}, 400);
+        const destinos = R5.destinosDeLeads(leads.filter(l => ids.includes(l.id)));
+        const camp = {id: crypto.randomUUID(), status: 'aguardando', corpo, destinos, total_previsto: destinos.length, criado_por: EU, created_at: agoraIso()};
+        campanhas.unshift(camp);
+        return json({ok: true, campanha: {id: camp.id, status: 'aguardando', total: destinos.length}, destinos: destinos.length, pulados: ids.length - destinos.length, avisados: 1, abrir: 'https://indycar-posvenda.onrender.com/?campanha=' + camp.id}, 201);
+      }
+      if (p === '/api/filtros') {
+        if (req.method === 'PUT') { try { const f = R5.validarFiltrosSalvos(d.filtros); filtros.set(pp, f); return json({ok: true, filtros: f}); } catch (e) { return json({erro: e.message}, e.status || 400); } }
+        return json({filtros: filtros.get(pp) || []});
+      }
+      if (p === '/api/previsao') return json(R5.previsaoPipeline(url.searchParams.get('meus') === '1' ? leads.filter(l => l.responsavel_id === EU) : leads));
+      if (p === '/api/motivos-perda') return json({motivos: R5.MOTIVOS_PERDA});
       if (p.startsWith('/api/ia/')) { const r = ia(url, req, d, json); if (r !== null) return r; }
       if (p === '/api/leads' && req.method === 'POST') {
         const c = clientes.find(x => String(x.telefone).replace(/\D/g, '').slice(-8) === String(d.telefone || '').replace(/\D/g, '').slice(-8));
@@ -515,7 +570,7 @@ export function criarMock({latencia = Number(process.env.MOCK_LATENCIA) || 0, ia
         if (req.method === 'PATCH') { for (const k of ['nascimento','aceita_mensagens']) if (k in d) c[k] = d[k]; return json({cliente: c}); }
         return json(fichaCliente(id));
       }
-      if (p === '/api/resumo-ia') return json({ok: true, resumo: '## Semana fictícia\n- Dados inventados pelo servidor falso.', modelo: 'mock', geradoEm: new Date().toISOString()});
+      if (p === '/api/resumo-ia') return json({ok: true, resumo: '## Semana fictícia\n- Dados inventados pelo servidor falso.\n\n## ✅ O que fazer esta semana\n1. Cobrar os orçamentos parados (fictício).\n2. Responder as conversas sem resposta (fictício).\n3. Preencher os valores pagos (fictício).', modelo: 'mock', geradoEm: new Date().toISOString(), previsao: R5.previsaoPipeline(leads)});
       if (p === '/api/catalogo') return json({servicos: [], souAdmin: me.papel === 'admin'});
       if (p === '/api/equipe' && req.method === 'GET') { const lista = me.papel === 'admin' ? equipe(pp) : [me]; return json({equipe: lista.map(x => ({id: x.id, nome: x.nome, email: x.email, papel: x.papel, ativo: x.ativo !== false, ultimo_acesso_em: x.ultimo_acesso_em, created_at: '2026-08-01T12:00:00Z'})), souAdmin: me.papel === 'admin', meuId: EU}); }
       if (p === '/api/equipe/papel' && req.method === 'POST') { if (me.papel !== 'admin') return json({erro: 'Só o administrador muda a função da equipe.', codigo: 'papel_insuficiente'}, 403); const x = equipe(pp).find(y => y.id === d.id); if (!x || !['admin','gestor','atendente','agenda'].includes(d.papel)) return json({erro: 'Pessoa ou função inválida.'}, 400); x.papel = d.papel; return json({ok: true}); }
@@ -537,4 +592,4 @@ export function criarMock({latencia = Number(process.env.MOCK_LATENCIA) || 0, ia
     } catch { return json({erro: 'Arquivo não encontrado'}, 404); }
   });
 }
-if (process.argv[1] === fileURLToPath(import.meta.url)) { const porta = Number(process.env.PORT) || 3101; criarMock().listen(porta, '127.0.0.1', () => console.log('CRM fictício em http://127.0.0.1:' + porta)); }
+if (process.argv[1] === fileURLToPath(import.meta.url)) { const porta = Number(process.env.PORT) || 3101; criarMock().listen(porta, '127.0.0.1', () => console.log('CRM fictício em http://127.0.0.1:' + porta + PREFIXO + '/')); }

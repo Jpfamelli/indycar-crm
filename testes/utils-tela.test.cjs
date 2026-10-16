@@ -45,7 +45,7 @@ test('métricas: conversão, ticket, ciclo, origem e motivos de perda', () => {
   assert.equal(m.cicloMedio, 10.5);
   assert.deepEqual(m.porOrigem.map(o => [o.origem, o.leads, o.ganhos]), [['meta', 3, 0], ['google', 1, 2]]);
   assert.equal(m.porOrigem[1].conversao, 100);
-  assert.deepEqual(m.motivos, [{motivo: 'Preço', qtd: 1}, {motivo: 'Sem motivo registrado', qtd: 1}]);
+  assert.deepEqual(m.motivos, [{motivo: 'Achou caro', qtd: 1}, {motivo: 'Sem motivo registrado', qtd: 1}], 'rodada 5: texto livre vira o motivo padrão');
   assert.equal(u.metricas([], p.ini, p.fim).cicloMedio, null);
 });
 

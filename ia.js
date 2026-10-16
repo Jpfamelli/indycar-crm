@@ -13,7 +13,7 @@ const MODEL = 'claude-opus-5-5';
 const brl = (n) => (Number(n) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
 /** Monta um briefing textual compacto a partir dos dados do CRM. */
-function montarBriefing({ stats, semanaLeads = [], extras = null, periodo = 'semana' }) {
+function montarBriefing({ stats, semanaLeads = [], extras = null, periodo = 'semana', previsao = null }) {
   const s = stats.semana;
   const c = stats.comparativo;
   const nomeP = periodo === 'mes' ? 'DOS ÚLTIMOS 30 DIAS' : 'DA SEMANA';
@@ -36,6 +36,15 @@ function montarBriefing({ stats, semanaLeads = [], extras = null, periodo = 'sem
     .slice(0, 10).join('\n') || '- (nenhum serviço concluído)';
 
   const min = v => (v == null ? 'sem dado' : `${v} min`);
+  /* Rodada 5: previsão de faturamento pelo funil (valor orçado × chance da etapa). */
+  const pv = previsao;
+  const blocoPrevisao = pv ? `
+
+PREVISÃO PELO FUNIL (o que está aberto hoje)
+- Leads abertos: ${pv.leadsAbertos} (${pv.semValor} sem valor orçado — ficam fora da conta)
+- Valor orçado em aberto: ${brl(pv.emAberto)}
+- Faturamento previsto: ${brl(pv.previsto)}${pv.conversaoHistorica != null ? ` (conversão real dos últimos 90 dias: ${pv.conversaoHistorica}%)` : ' (sem histórico suficiente; chances padrão por etapa)'}
+${pv.porEtapa.filter(e => e.leads).map(e => `- ${e.etapa}: ${e.leads} leads, ${brl(e.valor)} orçado, chance ${Math.round(e.chance * 100)}% → ${brl(e.previsto)}`).join('\n')}` : '';
   const blocoExtras = extras ? `
 
 ATENDIMENTO (WhatsApp)
@@ -76,7 +85,7 @@ SERVIÇOS FECHADOS
 ${ganhos}
 
 LEADS PERDIDOS
-${perdidos}${blocoExtras}`;
+${perdidos}${blocoPrevisao}${blocoExtras}`;
 }
 
 const SYSTEM = `Você é o analista comercial da IndyCar Centro Automotivo, uma oficina mecânica em Taubaté-SP especializada em câmbio automático, freios, suspensão, direção, pneus, troca de óleo e revisões.
@@ -100,10 +109,13 @@ Estruture assim, em português do Brasil:
 ## 📲 Atendimento, Comunicar e Orçador
 (quando esses blocos vierem no briefing: tempo de resposta no WhatsApp, quem respondeu e agendou pelas mensagens do Comunicar, orçamentos aprovados × recusados — o que isso diz sobre a operação. Se não vierem, pule esta seção.)
 
-## ✅ 3 ações para o próximo período
-(três recomendações concretas e acionáveis, em ordem de prioridade. Nada genérico — cite canal, serviço, número ou tarefa no CRM, como "cobrar os orçamentos parados" ou "responder mais rápido de manhã".)
+## 📈 Previsão pelo funil
+(quando o bloco PREVISÃO vier no briefing: diga em uma ou duas frases quanto deve entrar se o funil andar como de costume, qual etapa concentra o dinheiro e quantos leads estão sem valor orçado — isso derruba a previsão. Não repita a tabela. Se não vier, pule.)
 
-Regras: seja direto e honesto (se o período foi ruim, diga). Use os números reais fornecidos. Não invente dados que não estão no briefing. Se o briefing for de 30 dias, fale em "mês" em vez de "semana". Máximo ~500 palavras.`;
+## ✅ O que fazer esta semana
+(EXATAMENTE três ações concretas e acionáveis, numeradas, em ordem de prioridade, cada uma com: o que fazer, com quem/qual canal ou etapa, e o número que justifica. Nada genérico — exemplos do tom: "Cobrar os 12 orçamentos parados há mais de 4 dias (R$ 9.800 em aberto)", "Responder as 7 conversas sem resposta antes das 10h", "Preencher o valor pago das 5 vendas concluídas sem valor".)
+
+Regras: seja direto e honesto (se o período foi ruim, diga). Use os números reais fornecidos. Nunca cite preço de serviço nem prometa prazo ao cliente; os valores aqui são internos. Não invente dados que não estão no briefing. Se o briefing for de 30 dias, fale em "mês" em vez de "semana". Máximo ~500 palavras.`;
 
 /**
  * Gera o resumo (semanal ou mensal) chamando a Claude.
@@ -136,7 +148,7 @@ async function gerarResumoSemanal(dados, opcoes = {}) {
       model: modelo,
       // teto de raciocínio + texto: com pouco o modelo podia gastar tudo pensando
       max_tokens: 16000,
-      output_config: { effort: 'low' },   // resumo curto: corta custo e latência
+      ...require('./lib/rodada5').parametrosModelo(modelo),   // Sonnet: thinking between_tools; Opus/Haiku: effort low
       system: [{ type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } }],
       messages: [{ role: 'user', content: briefing }],
     });
