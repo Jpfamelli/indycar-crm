@@ -43,6 +43,7 @@ const { rotasR3 } = require('./lib/rotas');
 const SEG = require('./lib/seguranca');
 const U = require('./lib/util-servidor');
 const R4 = require('./lib/rodada4');
+const PATIO = require('./lib/patio-crm');
 const ESTATICOS = R4.criarEstaticos({ fs });
 const IDEM = R4.criarIdempotencia();
 const VERSAO = (() => { try { return require('./package.json').version + '-r4'; } catch { return 'r4'; } })();
@@ -999,6 +1000,19 @@ const server = http.createServer(async (req, res) => {
         } catch (e) { console.error('clientes:', e && e.message); return json(res, 503, { erro: 'Não consegui ler a base de clientes agora.' }); }
       }
 
+      // GET /api/indicacoes → leads que vieram de indicação pela Área do Cliente (filtro da lista)
+      if (pathname === '/api/indicacoes' && req.method === 'GET') {
+        const sbI = adminSupabase();
+        if (!sbI) return json(res, 200, { indicacoes: [] });
+        const { data, error } = await sbI.from('indicacoes').select('id,indicado_por,nome,status,lead_id,created_at')
+          .not('lead_id', 'is', null).order('created_at', { ascending: false }).limit(2000);
+        if (error) return json(res, 503, { erro: 'Não consegui ler as indicações agora.' });
+        const ids = [...new Set((data || []).map(i => i.indicado_por).filter(Boolean))];
+        const nomes = ids.length ? (await sbI.from('clientes').select('id,nome').in('id', ids.slice(0, 1000))).data || [] : [];
+        const nome = new Map(nomes.map(c => [c.id, c.nome]));
+        return json(res, 200, { indicacoes: (data || []).map(i => ({ lead_id: i.lead_id, status: i.status, indicado_por: i.indicado_por, indicado_por_nome: nome.get(i.indicado_por) || null })) });
+      }
+
       // GET /api/clientes/:id → ficha 360 de um cliente
       const mc = pathname.match(/^\/api\/clientes\/([0-9a-fA-F-]{36})$/);
       if (mc && req.method === 'PATCH') {
@@ -1015,7 +1029,16 @@ const server = http.createServer(async (req, res) => {
           if (!f) return json(res, 404, { erro: 'cliente não encontrado' });
 
           const concluidos = f.leads.filter(l => l.status === 'concluido').length;
+          // Pátio + Área do Cliente (16/10): passagens pela oficina e indicações feitas/recebidas
+          const sbP = adminSupabase();
+          const pi = sbP ? await PATIO.lerPatioEIndicacoes(sbP, { clienteId: mc[1], leadIds: f.leads.map(l => l.id), telefone: f.cliente.telefone })
+            .catch(() => null) : null;
           return json(res, 200, {
+            patio: pi ? pi.patio.map(o => ({ id: o.id, numero: o.numero, etapa: o.etapa, created_at: o.created_at, entregue_em: o.entregue_em, veiculo: o.veiculo, placa: o.placa, abrir: o.abrir,
+              aprovados: o.extras.filter(x => x.status === 'aprovado').length, recusados: o.extras.filter(x => x.status === 'recusado').length,
+              valor_aprovado: Math.round(o.extras.filter(x => x.status === 'aprovado').reduce((t, x) => t + (Number(x.valor) || 0), 0) * 100) / 100 })) : [],
+            indicacoes: pi ? pi.indicacoes : { feitas: [], recebidas: [] },
+            eventos: pi ? PATIO.eventosParaLinhaDoTempo(pi) : [],
             cliente: f.cliente,
             resumo: {
               gasto: Math.round(f.gasto * 100) / 100,

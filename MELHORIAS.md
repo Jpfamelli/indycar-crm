@@ -657,3 +657,16 @@ Confiabilidade com o Render dormindo, velocidade, valor pago, distribuição dos
 - Navegador (puppeteer-core + Chrome) no servidor falso: 43 verificações em 1440/375 px (painel, valores em lote, distribuir/desfazer, relatórios, ajuda, acordando e volta, fila e reenvio, cortesia, rascunho após recarregar, tour do atendente em 375, 375 sem rolagem lateral) + 10 de teclado, tema claro e movimento reduzido.
 - Banco real: só leitura (contagens: 589 leads sem responsável, 95 concluídos sem valor) e a migração aditiva `crm_distribuicoes_v1`; avaliação da IA sem gravar nada.
 123. PATCH /api/perfil soma as preferências às que já existem (antes substituía o objeto e apagava tema/tour/avisos guardados pelos outros apps).
+
+## Pátio (16/10/2026)
+1. **Linha do tempo do lead mostra as passagens pelo IndyCar Pátio**: "carro recebido (ordem nº N)" com carro/placa/serviço, cada troca de etapa (diagnóstico, aguardando aprovação/peça, execução, teste, pronto, entregue) com a etapa anterior.
+2. Extras do Pátio na linha do tempo: **APROVADO / recusado pelo cliente com o valor** (e o motivo da recusa); extra ainda esperando o cliente aparece como tal. Notas internas do pátio ficam de fora.
+3. Ícones novos na linha do tempo: 🔧 Pátio e 🤝 Indicação.
+4. **Indicações** da Área do Cliente: "Indicou <nome>" (com a situação: nova, contatada, agendou, virou cliente) na linha do tempo de quem indicou.
+5. Lead indicado: "Veio por indicação de <quem indicou>" na linha do tempo e selo "🤝 indicação de <primeiro nome>" no topo da ficha e na coluna Origem da lista; acha a indicação pelo lead_id ou pelo telefone.
+6. **Ficha do cliente**: blocos "Passagens pelo pátio" (ordem, etapa, entrada → entrega, extras aprovados/recusados, valor aprovado, botão "🔧 Pátio" que abre a ordem) e "Indicações" (cada amigo indicado, com situação e clique para o lead).
+7. **Filtro de origem "Área do Cliente (link do cliente)"** (`utm_source='area_cliente'`) e "Indicação" passou a incluir também os leads gerados por indicação da Área do Cliente (`GET /api/indicacoes`, só leitura com a chave de serviço).
+8. Selo "🔑 Área do Cliente" na lista para o lead que veio pelo link do cliente.
+9. A IA do CRM recebe o resumo do pátio **sem valores** (etapa, datas, quantos extras aprovados/recusados/pendentes) e se o cliente indicou ou veio por indicação.
+10. O Pátio é extra na ficha: se as tabelas não responderem, a ficha e a linha do tempo abrem normalmente (testado).
+11. `lib/patio-crm.js` (leitura + regras puras), `CrmUtils.casaOrigem` e `testes/patio-crm.test.cjs` (6 testes); mock com uma passagem pelo pátio e uma indicação; roteiro de navegador 1440/375 (linha do tempo, lead indicado, filtros, ficha do cliente) sem erro e sem rolagem lateral. Service worker `indycar-crm-v7`.

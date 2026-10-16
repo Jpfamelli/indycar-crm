@@ -123,7 +123,7 @@ function refiltrar() {
   const st = $('#fStatus').value, og = $('#fOrigem').value, q = $('#search').value.trim(), so = $('#soParados').checked, agora = Date.now();
   const rp = $('#fResp').value, eu = PERFIL?.id;
   const sv = $('#soSemValor')?.checked;
-  LEADS = TODOS.filter(l => (!st || l.status === st) && (!og || l.origem === og) && U.filtroResponsavel(l, rp, eu) && U.buscar(l, q) && (!so || U.parado(l, agora)) && (!sv || CrmR4.semValor(l)));
+  LEADS = TODOS.filter(l => (!st || l.status === st) && U.casaOrigem(l, og, INDICADOS) && U.filtroResponsavel(l, rp, eu) && U.buscar(l, q) && (!so || U.parado(l, agora)) && (!sv || CrmR4.semValor(l)));
   ordenarLeads();
   for (const id of [...SEL]) if (!TODOS.some(l => String(l.id) === id)) SEL.delete(id);
 }
@@ -176,7 +176,7 @@ function celula(c, l, agora) {
     case 'cliente': return `<td><div class="cell-main">${esc(l.nome)}</div><div class="cell-sub">${esc(U.formatarTelefone(l.telefone))}</div></td>`;
     case 'carro': return `<td><div class="cell-main">${esc(l.carro_modelo) || '—'}</div><div class="cell-sub">${esc(l.placa)}</div></td>`;
     case 'servico': return `<td>${esc(l.servico) || '—'}</td>`;
-    case 'origem': return `<td><span class="tag">${esc(LABEL_ORIGEM[l.origem] ?? l.origem)}</span></td>`;
+    case 'origem': return `<td><span class="tag">${esc(LABEL_ORIGEM[l.origem] ?? l.origem)}</span>${seloArea(l)}</td>`;
     case 'valor': return `<td class="num">${brl(U.valorLead(l))}</td>`;
     case 'status': return `<td><span class="badge b-${esc(l.status)}">${esc(LABEL_STATUS[l.status] ?? l.status)}</span></td>`;
     case 'etapa': { const d = U.diasNaEtapa(l, agora), p = U.parado(l, agora); return `<td class="cell-sub${p ? ' parado-txt' : ''}">${p ? '<span class="sr">Parado: </span>⚠ ' : ''}${esc(U.textoDias(d))}</td>`; }
@@ -465,7 +465,7 @@ function renderFichaLead(l) {
   $('#lfTopo').innerHTML = `<span class="avatar">${esc(iniciais(l.nome))}</span>
     <div class="lf-id"><div class="ficha-nome">${esc(l.nome)}</div>
       <div class="ficha-sub">${esc(U.formatarTelefone(l.telefone))}${l.carro_modelo ? ' · ' + esc(l.carro_modelo) : ''}${l.placa ? ' · ' + esc(l.placa) : ''}</div>
-      <div class="lf-tags"><span class="badge b-${esc(l.status)}">${esc(LABEL_STATUS[l.status] ?? l.status)}</span><span class="tag">${esc(LABEL_ORIGEM[l.origem] ?? l.origem ?? '')}</span>
+      <div class="lf-tags"><span class="badge b-${esc(l.status)}">${esc(LABEL_STATUS[l.status] ?? l.status)}</span><span class="tag">${esc(LABEL_ORIGEM[l.origem] ?? l.origem ?? '')}</span>${seloArea(l)}
         <span class="lf-tempo${p ? ' alerta' : ''}">${p ? '⚠ parado há ' + esc(U.textoDias(d)) : d ? 'na etapa há ' + esc(U.textoDias(d)) : 'mexido hoje'}</span>${motivo ? `<span class="tag">Perda: ${esc(motivo)}</span>` : ''}</div></div>
     <div class="lf-valor"><span>${l.status === 'concluido' ? 'Pago' : 'Orçado'}</span><b>${brl(U.valorLead(l))}</b>${l.servico ? `<small>${esc(l.servico)}</small>` : ''}</div>`;
   $('#lfAcoes').innerHTML = botaoAcao(U.linkConversa(l.telefone), 'Abrir conversa', '💬') + botaoAcao(U.linkWhatsApp(l.telefone), 'WhatsApp', '🟢') +
@@ -497,7 +497,13 @@ $('.lf-abas').addEventListener('keydown', e => {
   const i = ABAS.indexOf(document.activeElement.id); if (i < 0) return;
   if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); mostrarAba(ABAS[(i + (e.key === 'ArrowRight' ? 1 : ABAS.length - 1)) % ABAS.length], true); }
 });
-const ICONE_TL = {satisfacao: '⭐', mensagem: '💬', agendamento: '📅', orcamento: '🧾', comunicar: '✉️', status: '🔀', entrada: '🟢', fechamento: '🏁', evento: '•', nota: '📝'};
+/* Pátio + Área do Cliente (16/10): selo do lead que veio do link do cliente ou de indicação */
+function seloArea(l) {
+  const ind = INDICADOS.get(String(l.id));
+  if (ind) return ` <span class="tag tag-area" title="Indicado pela Área do Cliente${ind.indicado_por_nome ? ' por ' + esc(ind.indicado_por_nome) : ''}">🤝 ${ind.indicado_por_nome ? 'indicação de ' + esc(String(ind.indicado_por_nome).split(' ')[0]) : 'indicação'}</span>`;
+  return U.casaOrigem(l, 'area_cliente') ? ' <span class="tag tag-area" title="Veio pela Área do Cliente">🔑 Área do Cliente</span>' : '';
+}
+const ICONE_TL = {patio: '🔧', indicacao: '🤝', satisfacao: '⭐', mensagem: '💬', agendamento: '📅', orcamento: '🧾', comunicar: '✉️', status: '🔀', entrada: '🟢', fechamento: '🏁', evento: '•', nota: '📝'};
 async function carregarLinhaTempo(l) {
   const ger = ++LT_GERACAO, alvo = $('#linhaTempo');
   alvo.innerHTML = '<li class="skeleton" aria-label="Carregando linha do tempo"></li>'.repeat(3);
@@ -508,7 +514,7 @@ async function carregarLinhaTempo(l) {
   try { ctx = await api('/api/ia/lead/' + encodeURIComponent(l.id) + '/contexto'); }
   catch {
     fonte = 'reserva';
-    if (l.cliente_id) { try { const f = await api('/api/clientes/' + encodeURIComponent(l.cliente_id)); ctx = {agendamentos: (f.agendamentos || []).map(a => ({...a, status: LABEL_AGENDAMENTO[a.status] ?? a.status})), eventos: (f.leads || []).filter(x => String(x.id) !== String(l.id)).map(x => ({tipo: 'evento', quando: x.created_at, titulo: 'Outro lead · ' + (LABEL_STATUS[x.status] ?? x.status), detalhe: x.servico || ''}))}; } catch { /* sem reserva extra */ } }
+    if (l.cliente_id) { try { const f = await api('/api/clientes/' + encodeURIComponent(l.cliente_id)); ctx = {agendamentos: (f.agendamentos || []).map(a => ({...a, status: LABEL_AGENDAMENTO[a.status] ?? a.status})), eventos: [...(f.eventos || []), ...(f.leads || []).filter(x => String(x.id) !== String(l.id)).map(x => ({tipo: 'evento', quando: x.created_at, titulo: 'Outro lead · ' + (LABEL_STATUS[x.status] ?? x.status), detalhe: x.servico || ''}))]}; } catch { /* sem reserva extra */ } }
   }
   if (ger !== LT_GERACAO) return;
   // rótulos em português para status vindos do banco (agendamento e etapas do lead)

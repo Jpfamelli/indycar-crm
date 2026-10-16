@@ -111,6 +111,10 @@ const LABEL_ORIGEM = { meta:'Meta / Instagram', google:'Google', indicacao:'Indi
 const COR_ORIGEM = { meta:'#3b82f6', google:'#e50914', indicacao:'#22c55e',
   organico:'#a855f7', whatsapp:'#25d366', passagem:'#f59e0b', telefone:'#06b6d4' };
 const ORIGENS_FIXAS = ['meta', 'google', 'indicacao', 'organico', 'whatsapp', 'passagem', 'telefone'];
+/* Pátio + Área do Cliente (16/10/2026) */
+const ETAPA_PATIO = { recebido:'Recebido', diagnostico:'Diagnóstico', aguardando_aprovacao:'Aguardando aprovação', aguardando_peca:'Aguardando peça',
+  em_execucao:'Em execução', teste:'Em teste', pronto:'Pronto', entregue:'Entregue', cancelado:'Cancelado' };
+const STATUS_INDICACAO = { nova:'nova', contatada:'contatada', agendou:'agendou', virou_cliente:'virou cliente', descartada:'descartada' };
 const SERVICOS = ['Troca de Óleo de Motor','Troca de Óleo de Câmbio','Freios','Suspensão','Direção',
   'Correia Dentada','Pneus','Alinhamento 3D','Embreagem','Diagnóstico com Scanner',
   'Revisão de Motor','Revisão de Suspensão','Limpeza de Bicos','Outro'];
@@ -118,6 +122,8 @@ const SERVICOS = ['Troca de Óleo de Motor','Troca de Óleo de Câmbio','Freios'
 /* LEADS  = recorte filtrado (só a tabela da aba Leads usa)
    TODOS  = base completa (dashboard, funil e o modal usam) */
 let STATUSES = [], ORIGENS = [], LEADS = [], TODOS = [], STATS = null;
+/* Pátio + Área do Cliente (16/10): lead_id → { indicado_por_nome, status } das indicações */
+let INDICADOS = new Map();
 
 /* PERFIL   = quem está logado (nome, e-mail, papel, apps, cargo…)
    SOU_ADMIN / SOU_GESTOR são só para a apresentação: o servidor confere de novo em cada rota. */
@@ -276,9 +282,10 @@ async function carregar() {
 async function carregarLeads() {
   const geracao = ++geracaoLeads;
   // base completa: o funil e o dashboard nunca podem herdar o filtro da aba Leads
-  const todos = await api('/api/leads');
+  const [todos, ind] = await Promise.all([api('/api/leads'), api('/api/indicacoes').catch(() => null)]);
   if (geracao !== geracaoLeads) return;
   TODOS = Array.isArray(todos) ? todos : [];
+  if (ind && Array.isArray(ind.indicacoes)) INDICADOS = new Map(ind.indicacoes.filter(i => i.lead_id).map(i => [String(i.lead_id), i]));
   refiltrar(); salvarFiltros();
   renderTabelaLeads();
   renderKanban();               // sempre sobre TODOS
@@ -294,10 +301,11 @@ function preencherSelects() {
   $('#fStatus').innerHTML = '<option value="">Todos os status</option>' +
     STATUSES.map(s => opt(s, LABEL_STATUS[s] ?? s)).join('');
   $('#fOrigem').innerHTML = '<option value="">Todas as origens</option>' +
-    ORIGENS.map(o => opt(o, LABEL_ORIGEM[o] ?? o)).join('');
+    ORIGENS.map(o => opt(o, o === 'indicacao' ? 'Indicação (inclui as da Área do Cliente)' : LABEL_ORIGEM[o] ?? o)).join('') +
+    opt('area_cliente', 'Área do Cliente (link do cliente)');
 
   if (stAtual && STATUSES.includes(stAtual)) $('#fStatus').value = stAtual;
-  if (ogAtual && ORIGENS.includes(ogAtual))  $('#fOrigem').value = ogAtual;
+  if (ogAtual && (ORIGENS.includes(ogAtual) || ogAtual === 'area_cliente'))  $('#fOrigem').value = ogAtual;
 
   $('#fStatusForm').innerHTML = STATUSES.map(s => opt(s, LABEL_STATUS[s] ?? s)).join('');
   $('#fOrigemForm').innerHTML = ORIGENS.map(o => opt(o, LABEL_ORIGEM[o] ?? o)).join('');
@@ -838,6 +846,23 @@ async function abrirFichaCliente(id, opcoes = {}) {
         ${linhasAg ? `<table class="mini-tabela"><tbody>${linhasAg}</tbody></table>`
                    : '<p class="muted" style="font-size:.88rem">Sem horários marcados.</p>'}
       </div>
+
+      ${(f.patio || []).length ? `<div class="ficha-bloco">
+        <h4>Passagens pelo pátio</h4>
+        <table class="mini-tabela"><tbody>${f.patio.map(o => `<tr>
+          <td><div class="cell-main">Ordem nº ${esc(o.numero ?? '—')} · ${esc(ETAPA_PATIO[o.etapa] || o.etapa)}</div>
+              <div class="cell-sub">${dtAno(o.created_at)}${o.entregue_em ? ' → entregue ' + dtAno(o.entregue_em) : ''}${o.aprovados || o.recusados ? ` · extras: ${o.aprovados} aprovado(s), ${o.recusados} recusado(s)` : ''}</div></td>
+          <td class="num">${o.valor_aprovado ? brl(o.valor_aprovado) : '—'}</td>
+          <td><a class="acao" href="${esc(o.abrir)}" target="_blank" rel="noopener" aria-label="Abrir a ordem ${esc(o.numero ?? '')} no Pátio">🔧 Pátio</a></td></tr>`).join('')}</tbody></table>
+      </div>` : ''}
+
+      ${(f.indicacoes?.feitas || []).length || (f.indicacoes?.recebidas || []).length ? `<div class="ficha-bloco">
+        <h4>Indicações</h4>
+        ${(f.indicacoes.recebidas || []).map(i => `<p class="ficha-sub">🤝 Veio por indicação${i.indicado_por_nome ? ' de <b>' + esc(i.indicado_por_nome) + '</b>' : ''} · ${esc(STATUS_INDICACAO[i.status] || i.status)}</p>`).join('')}
+        ${(f.indicacoes.feitas || []).length ? `<table class="mini-tabela"><tbody>${f.indicacoes.feitas.map(i => `<tr${i.lead_id ? ` data-lead="${esc(i.lead_id)}" tabindex="0" class="clicavel" aria-label="Abrir o lead de ${esc(i.nome)}"` : ''}>
+          <td><div class="cell-main">🤝 ${esc(i.nome)}</div><div class="cell-sub">indicou em ${dtAno(i.created_at)}</div></td>
+          <td><span class="badge b-ind-${esc(i.status)}">${esc(STATUS_INDICACAO[i.status] || i.status)}</span></td></tr>`).join('')}</tbody></table>` : ''}
+      </div>` : ''}
 
       ${c.observacoes ? `<div class="ficha-bloco"><h4>Observações</h4>
         <p class="muted" style="font-size:.9rem;line-height:1.6">${esc(c.observacoes)}</p></div>` : ''}

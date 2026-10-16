@@ -16,6 +16,8 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {createRequire} from 'node:module';
+const PATIO = createRequire(import.meta.url)('../lib/patio-crm.js');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public');
 const statuses = ['novo','contato','orcamento','agendado','em_servico','concluido','perdido'];
 const origens = ['meta','google','organico','whatsapp','indicacao','passagem'];
@@ -230,6 +232,18 @@ export function criarMock({latencia = Number(process.env.MOCK_LATENCIA) || 0, ia
       ticket: ganhos.length ? faturamento / ganhos.length : 0, conversao: rec.length ? ganhos.length / rec.length * 100 : 0, porOrigem,
       porStatus: Object.fromEntries(statuses.map(s => [s, rec.filter(l => l.status === s).length]))};
   };
+  /* Pátio + Área do Cliente (16/10): o cliente fictício <teste> passou pelo pátio (extra aprovado e recusado)
+     e indicou um amigo, que virou o lead de outro cliente (utm_source=area_cliente). */
+  const C0 = clientes[0].id, leadDoC0 = leads.find(l => l.cliente_id === C0), leadIndicado = leads.find(l => l.cliente_id !== C0);
+  if (leadIndicado) { leadIndicado.utm_source = 'area_cliente'; leadIndicado.origem = 'indicacao'; }
+  const hAtras = h => new Date(Date.now() - h * 3600000).toISOString();
+  const PATIO_FALSO = [{id: '44444444-4444-4444-8444-444444444444', numero: 57, etapa: 'entregue', cliente_id: C0, lead_id: leadDoC0?.id || null, veiculo: 'Carro de teste', placa: 'ABC1D23',
+    servico: 'Revisão (fictícia)', created_at: hAtras(30), entregue_em: hAtras(2), abrir: PATIO.PATIO_URL + '/?os=44444444-4444-4444-8444-444444444444',
+    eventos: [{tipo: 'etapa', etapa_de: 'recebido', etapa_para: 'diagnostico', created_at: hAtras(29)}, {tipo: 'etapa', etapa_de: 'em_execucao', etapa_para: 'pronto', created_at: hAtras(6)}, {tipo: 'etapa', etapa_de: 'pronto', etapa_para: 'entregue', created_at: hAtras(2)}],
+    extras: [{id: 'x1', descricao: 'Disco de freio (fictício)', valor: 680, status: 'aprovado', decidido_em: hAtras(20)}, {id: 'x2', descricao: 'Palheta (fictícia)', valor: 60, status: 'recusado', decidido_em: hAtras(19), motivo_recusa: 'depois'}]}];
+  const INDICACOES_FALSAS = leadIndicado ? [{id: 'i1', indicado_por: C0, nome: 'Amigo Fictício', telefone: leadIndicado.telefone, status: 'agendou', lead_id: leadIndicado.id, created_at: hAtras(48)}] : [];
+  const piDoCliente = cid => ({patio: PATIO_FALSO.filter(o => o.cliente_id === cid), indicacoes: {feitas: INDICACOES_FALSAS.filter(i => i.indicado_por === cid), recebidas: []}});
+  const piDoLead = l => { const pi = piDoCliente(l.cliente_id); pi.indicacoes.recebidas = INDICACOES_FALSAS.filter(i => i.lead_id === l.id).map(i => ({...i, indicado_por_nome: clientes[0].nome})); return pi; };
   const fichaCliente = id => {
     const c = clientes.find(x => x.id === id); if (!c) return null;
     const ls = leads.filter(l => l.cliente_id === id);
@@ -238,7 +252,8 @@ export function criarMock({latencia = Number(process.env.MOCK_LATENCIA) || 0, ia
     const servicos = {}; for (const l of ls.filter(l => l.status === 'concluido')) servicos[l.servico] = (servicos[l.servico] || 0) + 1;
     return {cliente: c, resumo: {gasto, emAberto: ls.filter(l => !['concluido','perdido'].includes(l.status)).reduce((s, l) => s + Number(l.valor_orcado || 0), 0),
       servicosFeitos: Object.values(servicos).reduce((s, n) => s + n, 0), ticket: 0, leads: ls.length, agendamentos: ag.length, faltas: 0, ultimoServico: null},
-      leads: ls, agendamentos: ag, servicos: Object.entries(servicos).map(([nome, vezes]) => ({nome, vezes}))};
+      leads: ls, agendamentos: ag, servicos: Object.entries(servicos).map(([nome, vezes]) => ({nome, vezes})),
+      ...(() => { const pi = piDoCliente(id); return {patio: pi.patio.map(o => ({...o, aprovados: 1, recusados: 1, valor_aprovado: 680})), indicacoes: pi.indicacoes, eventos: PATIO.eventosParaLinhaDoTempo(pi)}; })()};
   };
   const contexto = l => {
     const ag = fichaCliente(l.cliente_id)?.agendamentos || [];
@@ -254,6 +269,7 @@ export function criarMock({latencia = Number(process.env.MOCK_LATENCIA) || 0, ia
       orcamentos: l.valor_orcado ? [{id: 'o1', numero: 1000 + leads.indexOf(l), status: 'enviado', total: l.valor_orcado, created_at: em(3600000), enviado_em: em(3600000), lead_id: l.id}] : [],
       comunicar: l.status === 'concluido' ? [{id: 'e1', tipo: 'pos_venda', status: 'enviado', corpo: 'Como ficou o carro? (fictício)', created_at: l.updated_at, enviado_em: l.updated_at, respondido_em: null, resposta: null}] : [],
       satisfacao: [],
+      ...(() => { const pi = piDoLead(l); return {patio: pi.patio, indicacoes: pi.indicacoes, eventos: PATIO.eventosParaLinhaDoTempo(pi)}; })(),
       sinais: {diasNaEtapa: Math.floor((Date.now() - Date.parse(l.updated_at || l.created_at)) / DIA), clienteEsperandoResposta: false},
       links: linksDe(l.telefone), geradoEm: new Date().toISOString(),
     };
@@ -471,6 +487,7 @@ export function criarMock({latencia = Number(process.env.MOCK_LATENCIA) || 0, ia
         leads.unshift(l); return json(l, 201);
       }
       if (p === '/api/leads') return json(leads);
+      if (p === '/api/indicacoes') return json({indicacoes: INDICACOES_FALSAS.map(i => ({lead_id: i.lead_id, status: i.status, indicado_por: i.indicado_por, indicado_por_nome: clientes[0].nome}))});
       if (p.startsWith('/api/leads/')) {
         const id = p.split('/').at(-1), l = leads.find(x => x.id === id);
         if (!l) return json({erro: 'lead não encontrado'}, 404);

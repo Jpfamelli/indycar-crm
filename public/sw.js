@@ -4,7 +4,7 @@
 // minutos ao acordar. A casca (HTML, CSS, JS) sai do cache quando o servidor
 // demora mais de 3,5 s ou responde erro — a tela abre e avisa "acordando".
 // Biblioteca do Supabase e fontes (endereços com versão) ficam em cache direto.
-const CACHE = 'indycar-crm-v6';
+const CACHE = 'indycar-crm-v7';
 const CACHE_EXTERNO = 'indycar-crm-externo-v1';
 
 /* Se QUALQUER item desta lista faltar, o addAll rejeita e o service worker

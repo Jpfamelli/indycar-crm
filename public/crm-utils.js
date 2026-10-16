@@ -168,6 +168,18 @@
       .sort((x, y) => ms(y.quando) - ms(x.quando))
       .filter(i => { const k = i.tipo + '|' + ms(i.quando) + '|' + i.titulo; if (vistos.has(k)) return false; vistos.add(k); return true; });
   }
+  /* Pátio + Área do Cliente (16/10/2026): filtro de origem.
+     'area_cliente' = lead criado pela Área do Cliente (utm_source='area_cliente');
+     'indicacao'    = origem Indicação OU lead gerado por uma indicação da Área do Cliente
+                      (indicados: Map/Set de ids de lead). */
+  function casaOrigem(l, og, indicados) {
+    if (!og) return true;
+    if (!l) return false;
+    const temIndicacao = indicados && typeof indicados.has === 'function' && indicados.has(String(l.id));
+    if (og === 'area_cliente') return String(l.utm_source || '').toLowerCase() === 'area_cliente';
+    if (og === 'indicacao') return l.origem === 'indicacao' || !!temIndicacao;
+    return l.origem === og;
+  }
   /* Lembretes do vendedor (guardados no aparelho). */
   function situacaoTarefa(t, agora = new Date()) {
     if (t.feita) return 'feita';
@@ -449,7 +461,7 @@
     if (s < 86400) return Math.floor(s / 3600) + ' h';
     const d = Math.floor(s / 86400); return d === 1 ? 'ontem' : d + ' dias';
   }
-  const api = {normalizar,digitos,buscar,validarLead,nascimento,moeda,csv,ETAPAS,ABERTAS,LIMITE_PARADO,valorLead,diasNaEtapa,parado,textoDias,resumoColuna,periodo,metricas,funilPassagem,comparar,motivoPerda,comMotivoPerda,telE164,linkWhatsApp,linkLigar,linkConversa,linkComunicar,linkAgenda,formatarTelefone,paginar,linhaDoTempo,situacaoTarefa,ordenarTarefas,novaTarefa,COLUNAS_LEADS,COLUNAS_PADRAO,colunasValidas,ATALHOS_ABA,
+  const api = {normalizar,digitos,buscar,validarLead,nascimento,moeda,csv,ETAPAS,ABERTAS,LIMITE_PARADO,valorLead,diasNaEtapa,parado,textoDias,resumoColuna,periodo,metricas,funilPassagem,comparar,motivoPerda,comMotivoPerda,telE164,linkWhatsApp,linkLigar,linkConversa,linkComunicar,linkAgenda,formatarTelefone,paginar,linhaDoTempo,casaOrigem,situacaoTarefa,ordenarTarefas,novaTarefa,COLUNAS_LEADS,COLUNAS_PADRAO,colunasValidas,ATALHOS_ABA,
     ehUuid,PAPEIS,ROTULO_PAPEL,ehGestor,URL_APPS,NOME_APPS,acessoApp,appsPermitidos,acaoErroAcesso,mensagemLogin,esperaLogin,validarNovaSenha,codigoMfaValido,linkNotificacao,CORES_AVATAR,corAvatar,filtroResponsavel,funilPorResponsavel,vencimentoDe,situacaoTarefaDb,ordenarTarefasDb,agruparTarefas,validarTarefa,lembreteParaTarefa,ROTULO_PRIORIDADE,mesAtual,intervaloMes,progressoMeta,CAMPOS_META,validarMetas,normalizarMetas,normalizarDesempenho,normalizarEquipe,podeReatribuir,ordenarDesempenho,deveGravarAcesso,mesclarPreferencias,tempoRelativo};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.CrmUtils = api;
